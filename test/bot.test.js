@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createDatabase } from '../src/sqlite.js';
 import { Store } from '../src/store.js';
 import { handleUpdate } from '../src/bot.js';
+import { maintenance } from '../src/jobs.js';
 
 function setup() {
   const db = createDatabase(); db.exec(readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8'));
@@ -36,4 +37,36 @@ test('paid reserve receipt owner approval and retried update preserve one order'
   review.update_id += 100; review.callback_query.from.id = 99;
   await handleUpdate(review, f.env, f.store); assert.equal((await f.store.getOrder(order.id)).status, 'approved');
   const jobs = (await f.db.prepare('SELECT payload FROM outbox').all()).results; assert.ok(jobs.some(j => j.payload.includes('/ticket/'))); f.db.close();
+});
+
+test('receipt review shows student status and previously approved tickets for the same event', async () => {
+  const f = setup();
+  await f.store.upsertUser({ id: 1, phone: '09123456789', first_name: 'علی', last_name: 'محمدی', profile: { is_fum_student: true } });
+  const event = await f.store.saveEvent({ name: 'نمایش', capacity: 3, max_per_user: 3, is_paid: 1, price: 50000 });
+  const first = await f.store.reserve(1, event.id, 1, 'first');
+  await f.store.submitReceipt(first.order.id, 1, 'first-photo');
+  await f.store.reviewOrder(first.order.id, true, 99);
+  await f.click(`e:${event.id}`);
+  await f.send('1');
+  await handleUpdate(f.message('', { photo: [{ file_id: 'second-photo', file_size: 1000 }] }), f.env, f.store);
+  const sent = (await f.db.prepare("SELECT payload FROM outbox WHERE method='sendPhoto'").all()).results;
+  assert.equal(sent.length, 1);
+  const caption = JSON.parse(sent[0].payload).caption;
+  assert.match(caption, /دانشجوی فردوسی بله/);
+  assert.match(caption, /تعداد بلیت درخواستی 1/);
+  assert.match(caption, /تعداد بلیت‌های قبلا خریداری شده 1/);
+  assert.match(caption, /نام رویداد نمایش/);
+  f.db.close();
+});
+
+test('daily backup catches up after midnight and queues only once per UTC day', async () => {
+  const f = setup();
+  f.env.DB = f.db;
+  f.env.BACKUP_CHAT = '-100456';
+  await maintenance(f.env, new Date('2026-11-12T00:04:00Z'));
+  await maintenance(f.env, new Date('2026-11-12T00:05:00Z'));
+  assert.equal((await f.db.prepare("SELECT id FROM outbox WHERE method='__backup'").all()).results.length, 1);
+  await maintenance(f.env, new Date('2026-11-13T00:03:00Z'));
+  assert.equal((await f.db.prepare("SELECT id FROM outbox WHERE method='__backup'").all()).results.length, 2);
+  f.db.close();
 });

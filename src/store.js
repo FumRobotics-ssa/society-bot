@@ -181,6 +181,10 @@ export class Store {
     const row = await this.one(`${this.orderSelect()} WHERE o.id=?`, String(id));
     return row ? { ...row, tickets: await this.getTicketsByOrder(id) } : null;
   }
+  async countApprovedTickets(userId, eventId) {
+    const row = await this.one("SELECT COALESCE(SUM(quantity),0) AS count FROM orders WHERE user_id=? AND event_id=? AND status='approved'", Number(userId), Number(eventId));
+    return Number(row?.count || 0);
+  }
   async listOrders({ eventId, status, userId, limit = 100, offset = 0 } = {}) {
     const where = [], values = [];
     if (eventId != null) { where.push('o.event_id=?'); values.push(Number(eventId)); }

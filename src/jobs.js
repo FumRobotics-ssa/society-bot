@@ -89,7 +89,7 @@ export async function processOutbox(env, limit = 8) {
     }
   }
 }
-export async function maintenance(env) {
+export async function maintenance(env, at = new Date()) {
   const store = new Store(env.DB);
   await store.expireOrders();
   await env.DB.batch([
@@ -98,9 +98,9 @@ export async function maintenance(env) {
     env.DB.prepare("DELETE FROM inbox WHERE status='done' AND processed_at<?").bind(now() - 7 * 86400),
     env.DB.prepare("DELETE FROM outbox WHERE status='sent' AND sent_at<?").bind(now() - 7 * 86400),
   ]);
-  // Daily at 00:00 UTC; deduplication also covers repeated cron invocations.
-  if ((env.BACKUP_CHAT || env.S3_BUCKET) && new Date().getUTCHours() === 0 && new Date().getUTCMinutes() === 0) {
-    await store.enqueue('__backup', {}, `backup:${new Date().toISOString().slice(0, 10)}`);
+  // Queue once per UTC day on the first cron run, even if the midnight run was delayed.
+  if (env.BACKUP_CHAT || env.S3_BUCKET) {
+    await store.enqueue('__backup', {}, `backup:${at.toISOString().slice(0, 10)}`);
   }
 }
 export async function runJobs(env, { maintenance: maintain = false } = {}) {

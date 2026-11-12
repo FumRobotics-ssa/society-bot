@@ -224,7 +224,20 @@ export async function handleUpdate(update, env, store) {
           if (!env.VERIFICATION_CHAT) return send('گروه بررسی پرداخت تنظیم نشده است لطفا با مدیر تماس بگیرید');
           const receiptType = photo ? 'photo' : 'document';
           const order = await store.submitReceipt(data.order_id, from.id, photo?.file_id || document.file_id, receiptType, `${updateKey}:receipt`);
-          await store.enqueue(photo ? 'sendPhoto' : 'sendDocument', { chat_id: env.VERIFICATION_CHAT, [photo ? 'photo' : 'document']: order.receipt_file_id, caption: `${orderText(order)}\nخریدار ${order.first_name || ''} ${order.last_name || ''}\nشناسه کاربر ${order.user_id}`, reply_markup: { inline_keyboard: [[{ text: 'تأیید پرداخت', callback_data: `r:${order.id}:y` }, { text: 'رد درخواست', callback_data: `r:${order.id}:n` }]] } }, `receipt:${order.id}:${order.receipt_file_id}`);
+          const user = await store.getUser(from.id);
+          const isFumStudent = profileOf(user).is_fum_student;
+          const previousTickets = await store.countApprovedTickets(from.id, order.event_id);
+          const receiptCaption = [
+            `کد سفارش ${order.id}`,
+            `شناسه کاربر ${order.user_id}`,
+            `نام و نام خانوادگی ${[order.first_name, order.last_name].filter(Boolean).join(' ') || 'ثبت نشده'}`,
+            `دانشجوی فردوسی ${isFumStudent == null ? 'نامشخص' : isFumStudent ? 'بله' : 'خیر'}`,
+            `نام رویداد ${order.event_name || 'نامشخص'}`,
+            `تعداد بلیت درخواستی ${order.quantity}`,
+            `تعداد بلیت‌های قبلا خریداری شده ${previousTickets}`,
+            `مبلغ کل ${money(Number(order.unit_price) * Number(order.quantity))} تومان`,
+          ].join('\n');
+          await store.enqueue(photo ? 'sendPhoto' : 'sendDocument', { chat_id: env.VERIFICATION_CHAT, [photo ? 'photo' : 'document']: order.receipt_file_id, caption: receiptCaption, reply_markup: { inline_keyboard: [[{ text: 'تأیید پرداخت', callback_data: `r:${order.id}:y` }, { text: 'رد درخواست', callback_data: `r:${order.id}:n` }]] } }, `receipt:${order.id}:${order.receipt_file_id}`);
           await send('رسید شما برای بررسی فرستاده شد\nنتیجه از همین ربات اطلاع داده میشود', MENU);
           await store.setState(from.id, 'idle', { last_update_id: update.update_id });
           return;
