@@ -12,8 +12,8 @@ html_handling = "none"
 [vars]
 PUBLIC_URL = "https://siahe.fum-robotics-ssa.workers.dev"
 OWNER_IDS = "1229020784"
-VERIFICATION_CHAT = ""
-BACKUP_CHAT = ""
+VERIFICATION_CHAT = "-1004405041822"
+BACKUP_CHAT = "-1003932010959"
 
 [[d1_databases]]
 binding = "DB"
