@@ -9,7 +9,7 @@ binding = "ASSETS"
 run_worker_first = true
 
 [vars]
-PUBLIC_URL = "https://REPLACE-WITH-YOUR-WORKER.workers.dev"
+PUBLIC_URL = "https://siahe.fum-robotics-ssa.workers.dev"
 OWNER_IDS = "REPLACE-WITH-YOUR-NUMERIC-TELEGRAM-ID"
 VERIFICATION_CHAT = ""
 BACKUP_CHAT = ""
@@ -17,7 +17,7 @@ BACKUP_CHAT = ""
 [[d1_databases]]
 binding = "DB"
 database_name = "siahe"
-database_id = "REPLACE-WITH-D1-DATABASE-ID"
+database_id = "0dfba6f2-cf7d-44a3-9e99-712531b7c261"
 migrations_dir = "migrations"
 
 [triggers]
