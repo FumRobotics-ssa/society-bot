@@ -10,7 +10,7 @@ run_worker_first = true
 
 [vars]
 PUBLIC_URL = "https://siahe.fum-robotics-ssa.workers.dev"
-OWNER_IDS = "REPLACE-WITH-YOUR-NUMERIC-TELEGRAM-ID"
+OWNER_IDS = "1229020784"
 VERIFICATION_CHAT = ""
 BACKUP_CHAT = ""
 
