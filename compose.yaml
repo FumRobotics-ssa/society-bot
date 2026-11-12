@@ -1,0 +1,18 @@
+services:
+  siahe:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      HOST: 0.0.0.0
+      DB_PATH: /app/data/siahe.sqlite
+    volumes:
+      - siahe_data:/app/data
+    ports:
+      - 127.0.0.1:8787:8787
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+volumes:
+  siahe_data:

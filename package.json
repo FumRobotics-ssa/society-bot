@@ -1,0 +1,19 @@
+{
+  "name": "siahe-rewrite",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "engines": { "node": ">=22.13.0" },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/server.js",
+    "test": "node --test",
+    "dev:cloud": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:local": "wrangler d1 migrations apply siahe --local",
+    "db:remote": "wrangler d1 migrations apply siahe --remote",
+    "webhook": "node --env-file-if-exists=.env scripts/webhook.js"
+  },
+  "dependencies": { "qrcode-generator": "1.4.4" },
+  "devDependencies": { "wrangler": "^4.0.0" }
+}

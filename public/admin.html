@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="referrer" content="no-referrer">
+  <title>سیاهه · مدیریت رویدادها</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/admin.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#content">رفتن به محتوا</a>
+  <section id="login" class="login-shell" aria-labelledby="login-title">
+    <div class="login-card">
+      <span class="eyebrow">سیاهه / میز مدیریت</span>
+      <h1 id="login-title">رویداد خوب<br>از اینجا شروع می‌شود</h1>
+      <p id="login-message" role="status">در حال بررسی ورود شما</p>
+      <p class="muted">برای دریافت لینک ورود، فرمان <bdi>/admin</bdi> را در گفتگوی خصوصی با ربات بفرستید و لینک یک‌بارمصرف را باز کنید</p>
+      <button id="retry-session" class="button">بررسی دوباره ورود</button>
+      <small>ورود فقط برای مدیران ثبت‌شده در ربات امکان‌پذیر است</small>
+    </div>
+    <div class="login-art" aria-hidden="true"><div class="ticket-art">سیاهه<span>هر صندلی، یک تجربه</span><i>ورود به یک اتفاق خوب</i></div></div>
+  </section>
+  <div id="app" class="app" hidden>
+    <aside class="sidebar">
+      <a href="/admin" class="brand" aria-label="سیاهه صفحه مدیریت">سیاهه<span>مدیریت رویداد و بلیت</span></a>
+      <nav aria-label="بخش‌های مدیریت" id="nav">
+        <button data-view="overview" class="nav-button">نمای کلی</button>
+        <button data-view="events" class="nav-button">رویدادها</button>
+        <button data-view="places" class="nav-button">مکان‌ها</button>
+        <button data-view="orders" class="nav-button">بررسی پرداخت‌ها</button>
+        <button data-view="tickets" class="nav-button">بلیت‌ها</button>
+        <button data-view="checkin" class="nav-button">ثبت ورود</button>
+        <button data-view="users" class="nav-button">شرکت‌کنندگان</button>
+        <button data-view="broadcast" class="nav-button">پیام‌رسانی</button>
+        <button data-view="admins" class="nav-button owner-only">مدیران</button>
+        <button data-view="settings" class="nav-button">داده‌ها و پشتیبان</button>
+      </nav>
+      <div class="sidebar-footer"><span id="identity"></span><button id="logout" class="text-button">خروج از حساب</button></div>
+    </aside>
+    <main id="content" tabindex="-1">
+      <header class="page-header"><div><p class="eyebrow">میز مدیریت سیاهه</p><h1 id="page-title">نمای کلی</h1></div><button id="refresh" class="button secondary">به‌روزرسانی</button></header>
+      <div id="page-error" class="notice error" role="alert" hidden></div>
+      <div id="loading" class="loading" role="status" hidden>در حال دریافت اطلاعات</div>
+      <section id="view-overview" data-panel="overview">
+        <div class="welcome"><div><p class="eyebrow">از برنامه‌ریزی تا لحظه ورود</p><h2>همه چیز برای رویداد بعدی</h2><p>رویدادها، رزروها و ورود شرکت‌کنندگان را از یک جا دنبال کنید</p></div><span class="welcome-mark" aria-hidden="true">س</span></div>
+        <div id="stats" class="stats"></div>
+        <div class="section-heading"><h2>رویدادهای شما</h2><button class="text-button" data-go="events">مدیریت رویدادها ←</button></div>
+        <div id="overview-events" class="event-grid"></div>
+      </section>
+      <section id="view-events" data-panel="events" hidden>
+        <div class="toolbar"><p>ساخت و مدیریت ظرفیت و فروش رویدادها</p><button id="new-event" class="button">رویداد جدید +</button></div>
+        <form id="event-form" class="panel form-panel" hidden>
+          <div class="section-heading"><h2 id="event-form-title">رویداد جدید</h2><button type="button" id="cancel-event" class="text-button">بستن</button></div>
+          <input name="id" type="hidden">
+          <div class="form-grid">
+            <label>نام رویداد<input name="name" required maxlength="200"></label>
+            <label>مکان<select name="place_id" id="event-place"><option value="">انتخاب مکان</option></select></label>
+            <label>زمان شروع<input name="starts_at" type="datetime-local" required><small>زمان با ساعت محلی دستگاه شما ثبت می‌شود</small></label>
+            <label>ظرفیت<input name="capacity" type="number" min="1" max="100000" required></label>
+            <label>حداکثر بلیت هر نفر<input name="max_per_user" type="number" min="1" max="100" value="1" required></label>
+            <label>قیمت هر بلیت به تومان<input name="price" type="number" min="0" step="1" value="0" required></label>
+            <label class="check"><input name="is_paid" type="checkbox">رویداد دارای هزینه است</label>
+            <label class="check"><input name="active" type="checkbox" checked>رزرو رویداد فعال باشد</label>
+            <label class="full">توضیحات<textarea name="description" rows="3" maxlength="3000"></textarea></label>
+            <label class="full">راهنمای پرداخت دستی<textarea name="payment_instructions" rows="3" maxlength="1500" placeholder="شماره کارت و نام صاحب حساب و توضیحات ارسال رسید"></textarea></label>
+          </div><div class="form-actions"><button class="button" type="submit">ذخیره رویداد</button></div>
+        </form>
+        <div id="events-list" class="event-grid"></div>
+      </section>
+      <section id="view-places" data-panel="places" hidden>
+        <form id="place-form" class="panel form-panel"><h2 id="place-form-title">افزودن مکان</h2><input name="id" type="hidden"><div class="form-grid"><label>نام مکان<input name="name" maxlength="200" required></label><label>ظرفیت<input name="capacity" type="number" min="1" max="100000" required></label><label class="full">نشانی<textarea name="address" rows="2" maxlength="1000" required></textarea></label></div><div class="form-actions"><button class="button" type="submit">ذخیره مکان</button><button id="reset-place" class="button secondary" type="button">پاک کردن فرم</button></div></form>
+        <div id="places-list"></div>
+      </section>
+      <section id="view-orders" data-panel="orders" hidden>
+        <div class="toolbar"><label>وضعیت<select id="order-status"><option value="pending">در انتظار بررسی</option><option value="approved">تأییدشده</option><option value="rejected">ردشده</option><option value="reserved">رزروشده</option><option value="expired">منقضی‌شده</option><option value="">همه وضعیت‌ها</option></select></label><label>رویداد<select id="orders-event" class="event-filter"></select></label></div>
+        <p class="muted">قبل از تأیید، رسید و مبلغ واریز را با حساب مقصد تطبیق دهید</p><div id="orders-list"></div>
+      </section>
+      <section id="view-tickets" data-panel="tickets" hidden>
+        <div class="toolbar"><label>رویداد<select id="tickets-event" class="event-filter"></select></label><div class="actions"><a id="export-tickets" class="button secondary" href="/api/export/tickets">خروجی CSV</a><a id="print-tickets" class="button secondary" href="/api/print" target="_blank" rel="noopener noreferrer">چاپ بلیت‌ها</a></div></div><div id="tickets-list"></div>
+      </section>
+      <section id="view-checkin" data-panel="checkin" hidden>
+        <div class="checkin-layout"><div class="panel form-panel"><p class="eyebrow">پذیرش شرکت‌کنندگان</p><h2>بلیت را بررسی و ورود را ثبت کنید</h2><p class="muted">کد یا لینک کامل بلیت را وارد کنید یا QR را با دوربین بخوانید</p><form id="checkin-form"><label>کد یا لینک بلیت<input id="checkin-token" dir="ltr" autocomplete="off" spellcheck="false" required maxlength="1000"></label><div class="form-actions"><button class="button" type="submit">بررسی و ثبت ورود</button><button id="camera-start" class="button secondary" type="button">اسکن با دوربین</button><button id="camera-stop" class="button secondary" type="button" hidden>بستن دوربین</button></div></form><p id="camera-message" class="muted" role="status"></p><video id="camera" autoplay playsinline muted hidden></video></div><div id="checkin-result" class="panel scan-result" aria-live="polite"><span class="scan-symbol" aria-hidden="true">↗</span><h2>آماده پذیرش</h2><p>نتیجه بررسی بلیت اینجا نمایش داده می‌شود</p></div></div>
+      </section>
+      <section id="view-users" data-panel="users" hidden><div class="toolbar"><p>کاربران ثبت‌شده در ربات</p><a class="button secondary" href="/api/export/users">دریافت خروجی CSV</a></div><div id="users-list"></div></section>
+      <section id="view-broadcast" data-panel="broadcast" hidden><form id="broadcast-form" class="panel form-panel narrow"><p class="eyebrow">ارتباط با شرکت‌کنندگان</p><h2>ارسال اطلاعیه</h2><label>دریافت‌کنندگان<select name="event_id" class="event-filter"></select><small>انتخاب همه رویدادها یعنی ارسال برای همه کاربران ثبت‌شده</small></label><label>متن پیام<textarea name="text" rows="7" required maxlength="3500"></textarea></label><label class="check"><input name="confirm" type="checkbox" required>متن و دریافت‌کنندگان را بررسی کردم و ارسال شود</label><div class="form-actions"><button class="button" type="submit">ثبت در صف ارسال</button></div><p id="broadcast-result" role="status"></p></form></section>
+      <section id="view-admins" data-panel="admins" hidden><form id="admin-form" class="panel form-panel"><h2>افزودن مدیر</h2><div class="form-grid"><label>شناسه عددی تلگرام<input name="user_id" inputmode="numeric" pattern="[0-9]+" required></label><label>سطح دسترسی<select name="role"><option value="admin">مدیر رویدادها</option><option value="checkin">فقط ثبت ورود</option></select></label></div><p class="muted">کاربر باید قبلا ربات را در گفتگوی خصوصی شروع کرده باشد</p><button class="button" type="submit">ثبت دسترسی</button></form><div id="admins-list"></div></section>
+      <section id="view-settings" data-panel="settings" hidden><div class="settings-grid"><div class="panel form-panel"><span class="eyebrow">داده‌های قابل انتقال</span><h2>دریافت نسخه پشتیبان</h2><p>فایل شامل اطلاعات کاربران و سفارش‌ها است و باید در محل خصوصی و امن نگهداری شود</p><a class="button" href="/api/backup">دریافت پشتیبان JSON</a></div><div class="panel form-panel"><span class="eyebrow">مدیریت ظرفیت</span><h2>پاکسازی رزروهای منقضی</h2><p>رزروهایی که مهلت آن‌ها تمام شده آزاد می‌شوند تا ظرفیت دوباره در دسترس قرار بگیرد</p><button id="expire" class="button secondary">اجرای پاکسازی</button><p id="expire-result" role="status"></p></div></div></section>
+      <footer class="main-footer">سیاهه <span>هر صندلی، یک تجربه</span></footer>
+    </main>
+  </div>
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>

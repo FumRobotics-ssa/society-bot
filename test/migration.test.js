@@ -1,0 +1,46 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { createDatabase } from '../src/sqlite.js';
+import { Store } from '../src/store.js';
+import { exportBackup } from '../src/backup.js';
+
+const schema = readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8');
+test('legacy conversion keeps approved ticket and profile without changing source or trusting old roles', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'siahe-migration-'));
+  const source = join(dir, 'old.sqlite'), output = join(dir, 'new.sql');
+  const old = createDatabase(source);
+  old.exec(`CREATE TABLE users(id INTEGER PRIMARY KEY,first_name TEXT,last_name TEXT,phone_number TEXT,role TEXT,is_student INTEGER,student_number TEXT);
+    CREATE TABLE places(id INTEGER PRIMARY KEY,name TEXT,address TEXT,capacity INTEGER);
+    CREATE TABLE events(id INTEGER PRIMARY KEY,name TEXT,description TEXT,is_paid INTEGER,max_ticket_batch INTEGER,place_id INTEGER,is_active INTEGER);
+    CREATE TABLE tickets(id INTEGER PRIMARY KEY,purchase_time TEXT,status TEXT,user_id INTEGER,event_id INTEGER);
+    INSERT INTO users VALUES(1,'علی','محمدی','09123456789','mod',1,'123456');
+    INSERT INTO places VALUES(1,'سالن','دانشگاه',10);
+    INSERT INTO events VALUES(1,'رویداد','',1,2,1,1);
+    INSERT INTO tickets VALUES(1234,'2025-01-01T00:00:00Z','completed',1,1);`);
+  old.close(); const before = readFileSync(source);
+  const result = spawnSync('python', [fileURLToPath(new URL('../scripts/import-legacy.py', import.meta.url)), source, output], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr); assert.deepEqual(readFileSync(source), before);
+  const target = createDatabase(); target.exec(schema); target.exec(readFileSync(output, 'utf8'));
+  assert.equal(target.native.prepare('SELECT legacy_code FROM tickets').get().legacy_code, '1234');
+  assert.equal(target.native.prepare('SELECT status FROM orders').get().status, 'approved');
+  assert.equal(target.native.prepare('SELECT COUNT(*) AS n FROM admins').get().n, 0);
+  assert.equal(target.native.prepare('SELECT active FROM events').get().active, 0); target.close(); rmSync(dir, { recursive: true });
+});
+test('JSON backup restore preserves ticket token and excludes sessions and admin rights by default', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'siahe-restore-')); const source = join(dir, 'backup.json'), output = join(dir, 'restore.sql');
+  const db = createDatabase(); db.exec(schema); const store = new Store(db);
+  await store.upsertUser({ id: 1, phone: '09123456789' }); await store.setAdmin(1, 'admin');
+  const event = await store.saveEvent({ name: 'رویداد', capacity: 2 }); const order = await store.reserve(1, event.id, 1, 'x');
+  writeFileSync(source, await exportBackup({ DB: db }));
+  const result = spawnSync('python', [fileURLToPath(new URL('../scripts/restore-backup.py', import.meta.url)), source, output], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const target = createDatabase(); target.exec(schema); target.exec(readFileSync(output, 'utf8'));
+  assert.equal(target.native.prepare('SELECT token FROM tickets').get().token, order.tickets[0].token);
+  assert.equal(target.native.prepare('SELECT COUNT(*) AS n FROM admins').get().n, 0);
+  db.close(); target.close(); rmSync(dir, { recursive: true });
+});
