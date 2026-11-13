@@ -1,7 +1,7 @@
 import { Store } from './store.js';
 
 export async function exportBackup(env) {
-  const tables = ['users', 'places', 'events', 'orders', 'tickets', 'admins', 'audit_log'];
+  const tables = ['users', 'places', 'events', 'orders', 'tickets', 'legacy_events', 'legacy_event_participants', 'admins', 'audit_log'];
   const result = await env.DB.batch(tables.map(table => env.DB.prepare(`SELECT * FROM ${table} LIMIT 10001`)));
   const data = {};
   tables.forEach((table, i) => {

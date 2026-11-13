@@ -17,7 +17,7 @@ spec = importlib.util.spec_from_file_location("siahe_legacy_import", Path(__file
 legacy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(legacy)
 
-FIELDS = {
+BASE_FIELDS = {
     "users": "id username first_name last_name phone profile_json is_deleted created_at updated_at",
     "places": "id name address capacity created_at map_url",
     "events": "id name description place_id capacity max_per_user is_paid price payment_instructions starts_at active archived created_at updated_at",
@@ -26,6 +26,11 @@ FIELDS = {
     "admins": "user_id role created_at",
     "audit_log": "id actor_id action target details_json created_at",
 }
+LEGACY_AUDIENCE_FIELDS = {
+    "legacy_events": "id name description place_name place_address is_paid was_active imported_at",
+    "legacy_event_participants": "legacy_event_id user_id ticket_count source_status",
+}
+FIELDS = {**BASE_FIELDS, **LEGACY_AUDIENCE_FIELDS}
 
 
 def validate_snapshot(snapshot, include_admins=False):
@@ -34,11 +39,11 @@ def validate_snapshot(snapshot, include_admins=False):
     if set(snapshot) - {"format", "version", "created_at", "tables"}:
         raise ValueError("Unknown top level snapshot fields")
     tables = snapshot.get("tables")
-    if not isinstance(tables, dict) or set(tables) != set(FIELDS):
-        raise ValueError("Snapshot must contain exactly the seven supported backup tables")
+    if not isinstance(tables, dict) or frozenset(tables) not in {frozenset(BASE_FIELDS), frozenset(FIELDS)}:
+        raise ValueError("Snapshot must contain exactly a supported set of backup tables")
     sql = legacy.empty_guard()
     for table, columns in FIELDS.items():
-        rows = tables[table]
+        rows = tables.get(table, [])
         if not isinstance(rows, list):
             raise ValueError("Expected a list of rows in table " + table)
         for row in rows:
@@ -63,6 +68,7 @@ def validate_snapshot(snapshot, include_admins=False):
     try:
         check.executescript((ROOT / "migrations" / "0001_init.sql").read_text(encoding="utf8"))
         check.executescript((ROOT / "migrations" / "0002_place_map_url.sql").read_text(encoding="utf8"))
+        check.executescript((ROOT / "migrations" / "0003_legacy_event_audience.sql").read_text(encoding="utf8"))
         check.executescript(text)
         if check.execute("PRAGMA foreign_key_check").fetchone():
             raise ValueError("Snapshot contains broken foreign keys")

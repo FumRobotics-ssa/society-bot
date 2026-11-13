@@ -182,3 +182,9 @@ select{
 .jalali-day{height:38px;aspect-ratio:auto;padding:0}
 .jalali-dialog-actions>div{display:flex;gap:8px}
 @media(max-width:360px){.jalali-dialog{padding:16px}.jalali-selects{gap:5px}.jalali-selects select{padding:5px 3px}}
+
+.participants-toolbar{display:grid;grid-template-columns:minmax(220px,1fr) minmax(240px,1fr) auto;align-items:end}
+.participants-toolbar>a{align-self:end}
+.user-event-labels{display:flex;flex-wrap:wrap;gap:5px;min-width:160px}
+@media(max-width:900px){.participants-toolbar{grid-template-columns:1fr 1fr}.participants-toolbar>a{grid-column:1/-1;justify-self:start}}
+@media(max-width:600px){.participants-toolbar{grid-template-columns:1fr}.participants-toolbar>a{grid-column:auto}}

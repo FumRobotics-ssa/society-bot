@@ -91,6 +91,7 @@ async function api(request, env, store, url) {
     return json({ ...stats, ...jobs });
   }
   if (path === '/api/events' && method === 'GET') return json(await store.listEvents(pagination(url)));
+  if (path === '/api/audience-events' && method === 'GET') return json(await store.listAudienceEvents(pagination(url)));
   if (path === '/api/places' && method === 'GET') return json(await store.listPlaces());
   if (path === '/api/events' && method === 'POST') { const item = await store.saveEvent(await body(request)); await store.audit(session.user_id, 'event.create', item.id, {}); return json(item, 201); }
   if (path === '/api/places' && method === 'POST') { const item = await store.savePlace(await body(request)); await store.audit(session.user_id, 'place.create', item.id, {}); return json(item, 201); }
@@ -114,7 +115,7 @@ async function api(request, env, store, url) {
   const file = path.match(/^\/api\/orders\/([a-zA-Z0-9-]+)\/receipt$/);
   if (file && method === 'GET') return receipt(env, await store.getOrder(file[1]));
   if (path === '/api/tickets' && method === 'GET') return json(await store.listTickets({ ...pagination(url), eventId: url.searchParams.get('eventId') || undefined }));
-  if (path === '/api/users' && method === 'GET') return json(await store.listUsers(pagination(url)));
+  if (path === '/api/users' && method === 'GET') return json(await store.listUsers({ ...pagination(url), search: url.searchParams.get('search') || '', audienceKey: url.searchParams.get('audienceKey') || '' }));
   if (path === '/api/export/users' && method === 'GET') return download(csv(await allPages(opts => store.listUsers(opts))), 'users.csv', 'text/csv;charset=utf-8');
   if (path === '/api/export/tickets' && method === 'GET') return download(csv(await allPages(opts => store.listTickets({ ...opts, eventId: url.searchParams.get('eventId') || undefined }))), 'tickets.csv', 'text/csv;charset=utf-8');
   if (path === '/api/print' && method === 'GET') {
@@ -127,10 +128,11 @@ async function api(request, env, store, url) {
   }
   if (path === '/api/broadcast' && method === 'POST') {
     const data = await body(request); if (typeof data.text !== 'string' || !data.text.trim() || data.text.length > 3500) fail('متن پیام باید بین یک تا ۳۵۰۰ نویسه باشد');
+    if (data.audience_key && !await store.getAudienceEvent(data.audience_key)) fail('دسته رویداد پیدا نشد');
     if (data.event_id && !await store.getEvent(Number(data.event_id))) fail('رویداد پیدا نشد');
     const id = crypto.randomUUID();
-    await store.enqueue('__broadcast', { text: data.text, event_id: data.event_id ? Number(data.event_id) : null, actor_id: session.user_id, broadcast_id: id }, id);
-    await store.audit(session.user_id, 'broadcast', id, { event_id: data.event_id || null });
+    await store.enqueue('__broadcast', { text: data.text, audience_key: data.audience_key || null, event_id: data.event_id ? Number(data.event_id) : null, actor_id: session.user_id, broadcast_id: id }, id);
+    await store.audit(session.user_id, 'broadcast', id, { audience_key: data.audience_key || null, event_id: data.event_id || null });
     return json({ queued: true, id }, 202);
   }
   if (path === '/api/expire' && method === 'POST') { await store.expireOrders(); return json({ ok: true }); }

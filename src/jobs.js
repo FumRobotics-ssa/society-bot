@@ -40,10 +40,16 @@ function nowLease(job) { return job.lease_until; }
 async function broadcast(job, env) {
   const data = JSON.parse(job.payload);
   const cursor = Number(data.cursor || 0);
-  const query = data.event_id
+  const legacyAudience = /^legacy:([1-9]\d*)$/.exec(String(data.audience_key || ''));
+  const currentAudience = /^current:([1-9]\d*)$/.exec(String(data.audience_key || ''));
+  if (data.audience_key && !legacyAudience && !currentAudience) throw new Error('Invalid broadcast audience key');
+  const eventId = currentAudience ? Number(currentAudience[1]) : data.event_id;
+  const query = legacyAudience
+    ? `SELECT DISTINCT u.id FROM users u JOIN legacy_event_participants ep ON ep.user_id=u.id WHERE u.id>? AND u.phone<>'' AND ep.legacy_event_id=? ORDER BY u.id LIMIT 20`
+    : eventId
     ? `SELECT DISTINCT u.id FROM users u JOIN orders o ON o.user_id=u.id WHERE u.id>? AND u.phone<>'' AND o.event_id=? AND o.status='approved' ORDER BY u.id LIMIT 20`
     : `SELECT id FROM users WHERE id>? AND phone<>'' ORDER BY id LIMIT 20`;
-  const args = data.event_id ? [cursor, data.event_id] : [cursor];
+  const args = legacyAudience ? [cursor, Number(legacyAudience[1])] : eventId ? [cursor, Number(eventId)] : [cursor];
   const rows = (await env.DB.prepare(query).bind(...args).all()).results;
   const statements = rows.map((row, index) => env.DB.prepare(`INSERT OR IGNORE INTO outbox(id,method,payload,dedupe_key,available_at) VALUES(?,?,?,?,?)`)
     .bind(crypto.randomUUID(), 'sendMessage', JSON.stringify({ chat_id: row.id, text: data.text }), `${data.broadcast_id || job.id}:user:${row.id}`, now() + Math.floor(index / 10)));

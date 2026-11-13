@@ -11,6 +11,15 @@ export function domainError(code, message) {
 }
 const parse = (value) => { try { return JSON.parse(value || '{}'); } catch { return {}; } };
 const userRow = (row) => row ? { ...row, profile: parse(row.profile_json) } : null;
+const normalizeDigits = (value) => String(value).replace(/[۰-۹٠-٩]/g, digit => {
+  const persian = '۰۱۲۳۴۵۶۷۸۹'.indexOf(digit);
+  return String(persian >= 0 ? persian : '٠١٢٣٤٥٦٧٨٩'.indexOf(digit));
+});
+function audienceKey(value) {
+  const match = /^(current|legacy):([1-9]\d*)$/.exec(String(value || ''));
+  if (!match || !Number.isSafeInteger(Number(match[2]))) return null;
+  return { kind: match[1], id: Number(match[2]) };
+}
 const int = (v, name, max = Number.MAX_SAFE_INTEGER) => {
   const n = Number(v);
   if (!Number.isSafeInteger(n) || n < 1 || n > max) throw domainError('INVALID_INPUT', `${name} معتبر نیست`);
@@ -70,8 +79,68 @@ export class Store {
     ]);
     return { deleted: true };
   }
-  async listUsers({ limit = 100, offset = 0 } = {}) {
-    return (await this.all('SELECT * FROM users WHERE is_deleted=0 ORDER BY created_at DESC,id LIMIT ? OFFSET ?', ...paging(limit, offset))).map(userRow);
+  async listUsers({ limit = 100, offset = 0, search = '', audienceKey: selectedAudience = '' } = {}) {
+    const where = ['u.is_deleted=0'], values = [];
+    const term = normalizeDigits(string(search, 'جستجو', 100)).replace(/^@/, '').toLowerCase();
+    if (term) {
+      const pattern = `%${term}%`;
+      const fields = [
+        'CAST(u.id AS TEXT)', 'LOWER(u.username)', 'LOWER(u.first_name)', 'LOWER(u.last_name)',
+        "LOWER(u.first_name || ' ' || u.last_name)", 'u.phone',
+        "CAST(json_extract(u.profile_json,'$.student_number') AS TEXT)",
+        "LOWER(json_extract(u.profile_json,'$.student_major'))",
+        "LOWER(json_extract(u.profile_json,'$.fum_faculty'))",
+        "LOWER(json_extract(u.profile_json,'$.university_name'))",
+      ];
+      where.push(`(${fields.map(field => `${field} LIKE ?`).join(' OR ')})`);
+      values.push(...fields.map(() => pattern));
+      const numeric = term.replace(/\D/g, '');
+      if (numeric) {
+        where.push("(CAST(u.id AS TEXT) LIKE ? OR replace(replace(replace(u.phone,'+',''),' ',''),'-','') LIKE ? OR ('0' || substr(replace(u.phone,'+',''),3)) LIKE ?)");
+        values.push(`%${numeric}%`, `%${numeric}%`, `%${numeric}%`);
+      }
+    }
+    if (selectedAudience) {
+      const selected = audienceKey(selectedAudience);
+      if (!selected) throw domainError('INVALID_INPUT', 'دسته رویداد معتبر نیست');
+      if (selected.kind === 'legacy') {
+        where.push(`EXISTS (SELECT 1 FROM legacy_event_participants ep WHERE ep.legacy_event_id=? AND ep.user_id=u.id)`);
+      } else {
+        where.push(`EXISTS (SELECT 1 FROM orders o WHERE o.event_id=? AND o.user_id=u.id AND o.status='approved')`);
+      }
+      values.push(selected.id);
+    }
+    const eventNames = `(
+      SELECT GROUP_CONCAT(label, '، ') FROM (
+        SELECT DISTINCT e.name AS label FROM orders o JOIN events e ON e.id=o.event_id
+        WHERE o.user_id=u.id AND o.status='approved'
+        UNION
+        SELECT DISTINCT le.name AS label FROM legacy_event_participants ep
+        JOIN legacy_events le ON le.id=ep.legacy_event_id WHERE ep.user_id=u.id
+      )`;
+    return (await this.all(`SELECT u.*,${eventNames}) AS event_names
+      FROM users u WHERE ${where.join(' AND ')}
+      ORDER BY u.created_at DESC,u.id LIMIT ? OFFSET ?`, ...values, ...paging(limit, offset))).map(userRow);
+  }
+  async listAudienceEvents({ limit = 1000, offset = 0 } = {}) {
+    return this.all(`SELECT audience_key,id,name,kind,participant_count FROM (
+      SELECT 'current:' || e.id AS audience_key,e.id,e.name,'current' AS kind,
+        (SELECT COUNT(DISTINCT o.user_id) FROM orders o JOIN users u ON u.id=o.user_id
+          WHERE o.event_id=e.id AND o.status='approved' AND u.phone<>'') AS participant_count
+      FROM events e WHERE e.archived=0
+      UNION ALL
+      SELECT 'legacy:' || le.id,le.id,le.name,'legacy',
+        (SELECT COUNT(DISTINCT ep.user_id) FROM legacy_event_participants ep JOIN users u ON u.id=ep.user_id
+          WHERE ep.legacy_event_id=le.id AND u.phone<>'')
+      FROM legacy_events le
+    ) ORDER BY kind,id DESC LIMIT ? OFFSET ?`, ...paging(limit, offset));
+  }
+  async getAudienceEvent(key) {
+    const selected = audienceKey(key);
+    if (!selected) return null;
+    return selected.kind === 'legacy'
+      ? this.one('SELECT id,name FROM legacy_events WHERE id=?', selected.id)
+      : this.one('SELECT id,name FROM events WHERE id=? AND archived=0', selected.id);
   }
   async getState(userId) {
     const row = await this.one('SELECT * FROM conversation_states WHERE user_id=?', Number(userId));
