@@ -165,3 +165,20 @@ select{
 .jalali-day.today{border-color:#74a2f0}
 .jalali-day.selected,.jalali-day.selected:hover{background:#0652dd;border-color:#0652dd;color:#ffffff}
 .jalali-dialog-actions{margin-top:18px}
+
+/* Keep event cards in a compact, even grid instead of spreading them apart. */
+.event-grid{grid-template-columns:repeat(auto-fit,minmax(min(100%,500px),1fr));gap:18px}
+.event-card{max-width:none}
+
+/* Pin month navigation to the outside edges and keep the calendar height fixed. */
+.jalali-calendar-header{display:grid;grid-template-columns:38px minmax(0,1fr) 38px}
+#jalali-prev{grid-column:1;grid-row:1}
+#jalali-dialog-title{grid-column:2;grid-row:1;text-align:center}
+#jalali-next{grid-column:3;grid-row:1}
+.jalali-selects{display:grid;grid-template-columns:.85fr 1.25fr .85fr;gap:8px;margin-bottom:14px}
+.jalali-selects label{gap:4px;font-size:11px}
+.jalali-selects select{height:38px;padding:6px 8px;text-align:center}
+.jalali-days{grid-template-rows:repeat(6,38px);align-content:start}
+.jalali-day{height:38px;aspect-ratio:auto;padding:0}
+.jalali-dialog-actions>div{display:flex;gap:8px}
+@media(max-width:360px){.jalali-dialog{padding:16px}.jalali-selects{gap:5px}.jalali-selects select{padding:5px 3px}}

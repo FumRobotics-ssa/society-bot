@@ -41,28 +41,52 @@ function date(value) {
   const d = new Date(typeof value === 'number' && value < 100000000000 ? value * 1000 : value);
   return Number.isNaN(d.getTime()) ? String(value) : new Intl.DateTimeFormat('fa-IR-u-ca-persian', { timeZone: 'Asia/Tehran', dateStyle: 'medium', timeStyle: 'short' }).format(d);
 }
-const calendar = { year: 0, month: 0 };
+const calendar = { year: 0, month: 0, day: 1 };
 function selectedJalaliDate() {
   try { return parseJalaliDate($('event-jalali-date').value); } catch { return null; }
 }
+function syncJalaliSelects() {
+  const currentYear = tehranDateTime().year;
+  const firstYear = Math.max(1200, currentYear - 20);
+  const lastYear = Math.min(1700, currentYear + 20);
+  const years = new Set(Array.from({ length: lastYear - firstYear + 1 }, (_, index) => firstYear + index));
+  years.add(calendar.year);
+  $('jalali-year').replaceChildren(...[...years].sort((a, b) => a - b).map(year => {
+    const option = el('option', persianNumber(year)); option.value = String(year); return option;
+  }));
+  $('jalali-month').replaceChildren(...jalaliMonths.map((month, index) => {
+    const option = el('option', month); option.value = String(index + 1); return option;
+  }));
+  const length = jalaliMonthLength(calendar.year, calendar.month);
+  calendar.day = Math.min(calendar.day, length);
+  $('jalali-day').replaceChildren(...Array.from({ length }, (_, index) => {
+    const day = index + 1, option = el('option', persianNumber(day)); option.value = String(day); return option;
+  }));
+  $('jalali-year').value = String(calendar.year);
+  $('jalali-month').value = String(calendar.month);
+  $('jalali-day').value = String(calendar.day);
+}
 function renderJalaliCalendar(focusDay = null) {
+  if (focusDay !== null) calendar.day = focusDay;
   const { year, month } = calendar;
+  calendar.day = Math.min(calendar.day, jalaliMonthLength(year, month));
+  syncJalaliSelects();
   $('jalali-dialog-title').textContent = `${jalaliMonths[month - 1]} ${persianNumber(year)}`;
   const days = $('jalali-days');
   days.replaceChildren();
   for (let i = 0; i < jalaliFirstWeekday(year, month); i++) days.append(el('span', null, 'jalali-empty'));
-  const selected = selectedJalaliDate();
   const today = tehranDateTime();
   for (let day = 1; day <= jalaliMonthLength(year, month); day++) {
-    const current = selected?.year === year && selected?.month === month && selected?.day === day;
+    const current = calendar.day === day;
     const isToday = today.year === year && today.month === month && today.day === day;
     const item = el('button', persianNumber(day), 'jalali-day' + (current ? ' selected' : '') + (isToday ? ' today' : ''));
     item.type = 'button'; item.dataset.day = String(day);
     item.setAttribute('aria-label', `${persianNumber(day)} ${jalaliMonths[month - 1]} ${persianNumber(year)}`);
     item.setAttribute('aria-pressed', String(Boolean(current)));
-    item.addEventListener('click', () => chooseJalaliDate(day));
+    item.addEventListener('click', () => renderJalaliCalendar(day));
     days.append(item);
   }
+  while (days.children.length < 42) days.append(el('span', null, 'jalali-empty'));
   if (focusDay) days.querySelector(`[data-day="${focusDay}"]`)?.focus();
 }
 function chooseJalaliDate(day) {
@@ -70,16 +94,16 @@ function chooseJalaliDate(day) {
   $('jalali-dialog').close();
   $('event-jalali-date').focus();
 }
-function shiftJalaliMonth(amount, focusDay = 1) {
+function shiftJalaliMonth(amount, focusDay = calendar.day) {
   const index = calendar.year * 12 + calendar.month - 1 + amount;
   const year = Math.floor(index / 12), month = index - year * 12 + 1;
   if (year < 1200 || year > 1700) return;
-  calendar.year = year; calendar.month = month;
+  calendar.year = year; calendar.month = month; calendar.day = focusDay;
   renderJalaliCalendar(Math.min(focusDay, jalaliMonthLength(year, month)));
 }
 function openJalaliCalendar() {
   const selected = selectedJalaliDate() || tehranDateTime();
-  calendar.year = selected.year; calendar.month = selected.month;
+  calendar.year = selected.year; calendar.month = selected.month; calendar.day = selected.day;
   renderJalaliCalendar();
   $('jalali-dialog').showModal();
   $('jalali-days').querySelector(`[data-day="${selected.day}"]`)?.focus();
@@ -371,7 +395,11 @@ $('event-jalali-date').addEventListener('click', openJalaliCalendar);
 $('event-jalali-date').addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openJalaliCalendar(); } });
 $('jalali-prev').addEventListener('click', () => shiftJalaliMonth(-1));
 $('jalali-next').addEventListener('click', () => shiftJalaliMonth(1));
-$('jalali-today').addEventListener('click', () => { const today = tehranDateTime(); calendar.year = today.year; calendar.month = today.month; chooseJalaliDate(today.day); });
+$('jalali-year').addEventListener('change', (event) => { calendar.year = Number(event.currentTarget.value); renderJalaliCalendar(); });
+$('jalali-month').addEventListener('change', (event) => { calendar.month = Number(event.currentTarget.value); renderJalaliCalendar(); });
+$('jalali-day').addEventListener('change', (event) => { calendar.day = Number(event.currentTarget.value); renderJalaliCalendar(); });
+$('jalali-confirm').addEventListener('click', () => chooseJalaliDate(calendar.day));
+$('jalali-today').addEventListener('click', () => { const today = tehranDateTime(); calendar.year = today.year; calendar.month = today.month; calendar.day = today.day; chooseJalaliDate(today.day); });
 $('jalali-close').addEventListener('click', () => $('jalali-dialog').close());
 $('jalali-dialog').addEventListener('click', (event) => { if (event.target === $('jalali-dialog')) $('jalali-dialog').close(); });
 $('jalali-dialog').addEventListener('keydown', (event) => {
@@ -387,7 +415,7 @@ $('jalali-dialog').addEventListener('keydown', (event) => {
     if (previousYear >= 1200) shiftJalaliMonth(-1, jalaliMonthLength(previousYear, previousMonth) + next);
   }
   else if (next > length) shiftJalaliMonth(1, next - length);
-  else $('jalali-days').querySelector(`[data-day="${next}"]`)?.focus();
+  else { calendar.day = next; renderJalaliCalendar(next); }
 });
 $('event-form').addEventListener('submit', (event) => {
   event.preventDefault(); const form = event.currentTarget; const values = new FormData(form);
