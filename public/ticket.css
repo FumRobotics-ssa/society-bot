@@ -1,18 +1,18 @@
-:root{font-family:Tahoma,Arial,sans-serif;color:#192b31;background:#f4f5f0}body{margin:0;padding:24px}main{max-width:920px;margin:auto;display:flex;flex-wrap:wrap;justify-content:center;gap:18px}.ticket{box-sizing:border-box;width:360px;padding:24px;text-align:center;background:#fff;border:1px solid #ccd6cf;border-radius:18px;break-inside:avoid}.ticket img{display:block;width:240px;max-width:100%;height:auto;margin:18px auto}.ticket h2{font-size:20px}.ticket p{line-height:1.8;overflow-wrap:anywhere}.print-help{width:100%;text-align:center}@media print{body{padding:0;background:#fff}.ticket{border-radius:0;width:46%;padding:12px}.ticket img{width:180px}.print-help{display:none}}
+:root{font-family:Tahoma,Arial,sans-serif;color:#ffffff;background:#0f131a}body{margin:0;padding:24px}main{max-width:920px;margin:auto;display:flex;flex-wrap:wrap;justify-content:center;gap:18px}.ticket{box-sizing:border-box;width:360px;padding:24px;text-align:center;background:#ffffff;border:1px solid #74a2f0;border-radius:18px;break-inside:avoid}.ticket img{display:block;width:240px;max-width:100%;height:auto;margin:18px auto}.ticket h2{font-size:20px}.ticket p{line-height:1.8;overflow-wrap:anywhere}.print-help{width:100%;text-align:center}@media print{body{padding:0;background:#ffffff}.ticket{border-radius:0;width:46%;padding:12px}.ticket img{width:180px}.print-help{display:none}}
 
 @font-face{font-family:"Meem";src:url("/fonts/Meem-Regular.ttf") format("truetype");font-style:normal;font-weight:400;font-display:swap}
 @font-face{font-family:"Meem";src:url("/fonts/Meem-Bold.ttf") format("truetype");font-style:normal;font-weight:700;font-display:swap}
 :root{font-family:"Meem",Tahoma,Arial,sans-serif}
 
 
-:root{color:#F4F6FC;background:#000000;color-scheme:dark}
-body{background:#000000}
-.ticket{background:#26295E;border-color:#BBC5D6;color:#F4F6FC}
-.ticket img:not(.association-logo){box-sizing:border-box;background:#F4F6FC;padding:10px;border-radius:10px}
+:root{color:#ffffff;background:#0f131a;color-scheme:dark}
+body{background:#0f131a}
+.ticket{background:#191919;border-color:#74a2f0;color:#ffffff}
+.ticket img:not(.association-logo){box-sizing:border-box;background:#ffffff;padding:10px;border-radius:10px}
 .ticket .association-logo{display:block;width:76px;height:76px;margin:0 auto 10px;object-fit:contain;filter:invert(1);mix-blend-mode:screen}
 @media print{
-  :root{color:#000000;background:#FFFFFF;color-scheme:light}
-  body{background:#FFFFFF}
-  .ticket{background:#FFFFFF;color:#000000;border-color:#000000}
+  :root{color:#0f131a;background:#ffffff;color-scheme:light}
+  body{background:#ffffff}
+  .ticket{background:#ffffff;color:#0f131a;border-color:#0f131a}
   .ticket .association-logo{filter:none;mix-blend-mode:multiply}
 }
