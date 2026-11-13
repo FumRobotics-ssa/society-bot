@@ -97,7 +97,7 @@ tr:hover td{background:#0f131a}
 .brand span{margin-top:3px}
 .brand .brand-title{font-size:26px;font-weight:900;color:#ffffff}
 .brand span:last-child{font-size:14px;white-space:nowrap}
-.login-logo{width:100px;height:100px;margin:0 0 20px auto}
+.login-logo{width:100px;height:100px;margin:0 0 20px auto;filter:none;mix-blend-mode:normal}
 .welcome-logo{width:110px;height:110px;opacity:.9;margin-left:24px}
 select{
   appearance:none;
