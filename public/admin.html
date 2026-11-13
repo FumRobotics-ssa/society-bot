@@ -3,16 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="color-scheme" content="light">
+  <meta name="color-scheme" content="dark">
   <meta name="referrer" content="no-referrer">
   <title>انجمن علمی رباتیک دانشگاه فردوسی مشهد · مدیریت رویدادها</title>
   <link rel="stylesheet" href="/style.css">
   <script src="/admin.js" defer></script>
+  <script src="/grid.js" defer></script>
 </head>
 <body>
   <a class="skip" href="#content">رفتن به محتوا</a>
   <section id="login" class="login-shell" aria-labelledby="login-title">
     <div class="login-card">
+      <img class="association-logo login-logo" src="/logo.png" alt="نشان انجمن رباتیک دانشگاه فردوسی مشهد" width="100" height="100">
       <span class="eyebrow">انجمن رباتیک / میز مدیریت</span>
       <h1 id="login-title">رویداد خوب<br>از اینجا شروع می‌شود</h1>
       <p id="login-message" role="status">در حال بررسی ورود شما</p>
@@ -24,7 +26,7 @@
   </section>
   <div id="app" class="app" hidden>
     <aside class="sidebar">
-      <a href="/admin" class="brand" aria-label="انجمن علمی رباتیک دانشگاه فردوسی مشهد صفحه مدیریت">انجمن رباتیک<span>دانشگاه فردوسی مشهد</span></a>
+      <a href="/admin" class="brand" aria-label="انجمن علمی رباتیک دانشگاه فردوسی مشهد صفحه مدیریت"><img class="association-logo sidebar-logo" src="/logo.png" alt="" width="72" height="72"><span class="brand-title">انجمن رباتیک</span><span>دانشگاه فردوسی مشهد</span></a>
       <nav aria-label="بخش‌های مدیریت" id="nav">
         <button data-view="overview" class="nav-button">نمای کلی</button>
         <button data-view="events" class="nav-button">رویدادها</button>
@@ -44,7 +46,7 @@
       <div id="page-error" class="notice error" role="alert" hidden></div>
       <div id="loading" class="loading" role="status" hidden>در حال دریافت اطلاعات</div>
       <section id="view-overview" data-panel="overview">
-        <div class="welcome"><div><p class="eyebrow">از برنامه‌ریزی تا لحظه ورود</p><h2>همه چیز برای رویداد بعدی</h2><p>رویدادها، رزروها و ورود شرکت‌کنندگان را از یک جا دنبال کنید</p></div><span class="welcome-mark" aria-hidden="true">س</span></div>
+        <div class="welcome"><div><p class="eyebrow">از برنامه‌ریزی تا لحظه ورود</p><h2>همه چیز برای رویداد بعدی</h2><p>رویدادها، رزروها و ورود شرکت‌کنندگان را از یک جا دنبال کنید</p></div><img class="association-logo welcome-logo" src="/logo.png" alt="" width="110" height="110"></div>
         <div id="stats" class="stats"></div>
         <div class="section-heading"><h2>رویدادهای شما</h2><button class="text-button" data-go="events">مدیریت رویدادها ←</button></div>
         <div id="overview-events" class="event-grid"></div>

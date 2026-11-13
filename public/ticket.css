@@ -8,9 +8,11 @@
 :root{color:#F4F6FC;background:#000000;color-scheme:dark}
 body{background:#000000}
 .ticket{background:#26295E;border-color:#BBC5D6;color:#F4F6FC}
-.ticket img{box-sizing:border-box;background:#F4F6FC;padding:10px;border-radius:10px}
+.ticket img:not(.association-logo){box-sizing:border-box;background:#F4F6FC;padding:10px;border-radius:10px}
+.ticket .association-logo{display:block;width:76px;height:76px;margin:0 auto 10px;object-fit:contain;filter:invert(1);mix-blend-mode:screen}
 @media print{
   :root{color:#000000;background:#FFFFFF;color-scheme:light}
   body{background:#FFFFFF}
   .ticket{background:#FFFFFF;color:#000000;border-color:#000000}
+  .ticket .association-logo{filter:none;mix-blend-mode:multiply}
 }
