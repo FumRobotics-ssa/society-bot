@@ -51,5 +51,5 @@ export async function runBackup(env, key) {
     for (const field of ['S3_ENDPOINT', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY']) if (!env[field]) throw new Error(`Missing ${field}`);
     await putS3(env, `backups/${filename}`, snapshot);
   }
-  if (env.BACKUP_CHAT) await new Store(env.DB).enqueue('sendDocument', { chat_id: env.BACKUP_CHAT, _documentText: snapshot, filename, caption: 'نسخه پشتیبان محرمانه سیاهه' }, `backup-file:${key}`);
+  if (env.BACKUP_CHAT) await new Store(env.DB).enqueue('sendDocument', { chat_id: env.BACKUP_CHAT, _documentText: snapshot, filename, caption: 'نسخه پشتیبان محرمانه انجمن علمی رباتیک' }, `backup-file:${key}`);
 }

@@ -7,3 +7,53 @@
 @font-face{font-family:"Meem";src:url("/fonts/Meem-ExtraBold.ttf") format("truetype");font-style:normal;font-weight:800;font-display:swap}
 @font-face{font-family:"Meem";src:url("/fonts/Meem-Black.ttf") format("truetype");font-style:normal;font-weight:900;font-display:swap}
 :root{font-family:"Meem",Tahoma,"Segoe UI",sans-serif}
+
+
+/* Association theme */
+:root{
+  --ink:#F4F6FC;--muted:#BBC5D6;--paper:#000000;--white:#26295E;
+  --green:#27D3E2;--green-light:#26295E;--line:#BBC5D655;
+  --yellow:#FF9850;--danger:#FF9850;--shadow:0 8px 32px #00000099;
+  color-scheme:dark;
+}
+body{background:#000000;color:#F4F6FC}
+.sidebar,.welcome,.login-art{background:#26295E;border-color:#BBC5D655}
+.brand{font-size:25px;letter-spacing:0;line-height:1.45;margin:0 5px 32px}
+.brand span{font-size:12px;color:#BBC5D6}
+.sidebar-footer,.main-footer,.eyebrow,.muted,small{color:#BBC5D6}
+.nav-button{color:#BBC5D6}
+.nav-button:hover,.nav-button.active{background:#000000;color:#27D3E2}
+.nav-button.active:before{background:#27D3E2}
+.welcome p:last-child,.event-card .description,.event-meta,.toolbar p,.scan-result p{color:#BBC5D6}
+.welcome-mark,.scan-symbol{color:#27D3E2}
+.event-card,.panel,.stat,.table-wrap,.empty{background:#26295E;color:#F4F6FC;border-color:#BBC5D655}
+.event-card:before,.event-card:after{background:#000000;border-color:#BBC5D655}
+.event-meta strong,.empty strong,.stat .value{color:#F4F6FC}
+.badge,.badge.muted{background:#000000;color:#BBC5D6}
+.badge.warn{background:#000000;color:#FF9850}
+.badge.error{background:#000000;color:#FF9850}
+.button{background:#27D3E2;border-color:#27D3E2;color:#000000}
+.button.secondary{background:#26295E;color:#27D3E2;border-color:#27D3E2}
+.button.danger{background:#26295E;color:#FF9850;border-color:#FF9850}
+.text-button,.receipt-link{color:#27D3E2}
+label{color:#BBC5D6}
+input,select,textarea{background:#000000;border-color:#BBC5D688;color:#F4F6FC}
+input::placeholder,textarea::placeholder{color:#BBC5D6}
+input:focus,select:focus,textarea:focus{border-color:#27D3E2}
+label.check input{accent-color:#27D3E2}
+th{background:#000000;color:#BBC5D6}
+td,th,.card-top,.main-footer{border-color:#BBC5D655}
+tr:hover td{background:#000000}
+.notice{background:#26295E;border-color:#FF9850;color:#F4F6FC}
+.notice.error{background:#26295E;border-color:#FF9850;color:#FF9850}
+.scan-result.success{background:#26295E;border-color:#27D3E2}
+.scan-result.failure{background:#26295E;border-color:#FF9850}
+.toast{background:#26295E;color:#F4F6FC;border:1px solid #27D3E2}
+.ticket-art{background:#000000;border-color:#27D3E2;box-shadow:16px 25px 0 #000000;font-size:35px;line-height:1.7;padding:38px 28px}
+.ticket-art span{font-size:17px;margin-top:20px}
+.ticket-art i{margin-top:42px}
+.skip{background:#26295E;color:#F4F6FC}
+.ticket-art:before,.ticket-art:after{background:#26295E}
+.ticket-art i{border-color:#BBC5D655}
+:focus-visible{outline-color:#FF9850}
+@media(max-width:700px){.brand{font-size:21px;margin:0}}

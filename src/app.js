@@ -34,9 +34,9 @@ function qrSvg(url) { const code = qr(0, 'M'); code.addData(url); code.make(); r
 function ticketHTML(ticket, env, print = false) {
   const url = `${env.PUBLIC_URL.replace(/\/$/, '')}/ticket/${ticket.token}`;
   const valid = ticket.order_status === 'approved';
-  return `<article class="ticket"><p>سیاهه</p><h2>${esc(ticket.event_name)}</h2><p>${valid ? ticket.checked_in_at ? 'ورود ثبت شده' : 'بلیت معتبر' : 'این بلیت معتبر نیست'}</p><img src="/ticket/${ticket.token}/qr.svg" alt="کد QR بلیت" width="240" height="240"><p dir="ltr">${esc(ticket.legacy_code || ticket.id)}</p>${print ? `<p>${esc(ticket.first_name)} ${esc(ticket.last_name)}</p>` : ''}<p>برای ثبت ورود کد را به مسئول پذیرش نشان دهید</p></article>`;
+  return `<article class="ticket"><p>انجمن علمی رباتیک دانشگاه فردوسی مشهد</p><h2>${esc(ticket.event_name)}</h2><p>${valid ? ticket.checked_in_at ? 'ورود ثبت شده' : 'بلیت معتبر' : 'این بلیت معتبر نیست'}</p><img src="/ticket/${ticket.token}/qr.svg" alt="کد QR بلیت" width="240" height="240"><p dir="ltr">${esc(ticket.legacy_code || ticket.id)}</p>${print ? `<p>${esc(ticket.first_name)} ${esc(ticket.last_name)}</p>` : ''}<p>برای ثبت ورود کد را به مسئول پذیرش نشان دهید</p></article>`;
 }
-function page(content, title = 'بلیت سیاهه') { return `<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><link rel="stylesheet" href="/ticket.css"><body><main>${content}</main></body></html>`; }
+function page(content, title = 'بلیت انجمن رباتیک') { return `<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><link rel="stylesheet" href="/ticket.css"><body><main>${content}</main></body></html>`; }
 function pagination(url) { return { limit: Math.min(200, Math.max(1, Number(url.searchParams.get('limit')) || 100)), offset: Math.max(0, Number(url.searchParams.get('offset')) || 0) }; }
 async function allPages(loader) {
   const rows = [];

@@ -3,3 +3,14 @@
 @font-face{font-family:"Meem";src:url("/fonts/Meem-Regular.ttf") format("truetype");font-style:normal;font-weight:400;font-display:swap}
 @font-face{font-family:"Meem";src:url("/fonts/Meem-Bold.ttf") format("truetype");font-style:normal;font-weight:700;font-display:swap}
 :root{font-family:"Meem",Tahoma,Arial,sans-serif}
+
+
+:root{color:#F4F6FC;background:#000000;color-scheme:dark}
+body{background:#000000}
+.ticket{background:#26295E;border-color:#BBC5D6;color:#F4F6FC}
+.ticket img{box-sizing:border-box;background:#F4F6FC;padding:10px;border-radius:10px}
+@media print{
+  :root{color:#000000;background:#FFFFFF;color-scheme:light}
+  body{background:#FFFFFF}
+  .ticket{background:#FFFFFF;color:#000000;border-color:#000000}
+}
