@@ -124,3 +124,44 @@ select{
 .fa-bullhorn:before{content:"\f0a1"}
 .fa-user-secret:before{content:"\f21b"}
 .fa-database:before{content:"\f1c0"}
+
+/* Keep every management action reachable on short desktop screens. */
+.sidebar{overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#74a2f055 transparent}
+@media(min-width:701px) and (max-height:820px){
+  .sidebar{padding-top:18px;padding-bottom:14px}
+  .sidebar-logo{width:118px;height:118px}
+  .brand{margin-bottom:18px}
+  .nav-button{padding-block:7px}
+}
+
+/* Put the association identity on one compact row above the swipeable menu. */
+@media(max-width:700px){
+  .sidebar{overflow:visible}
+  .brand{display:grid;grid-template-columns:68px minmax(0,1fr);grid-template-rows:auto auto;column-gap:12px;width:100%;max-width:none;align-items:center;text-align:right;margin:0}
+  .sidebar-logo{grid-column:1;grid-row:1/3;width:68px;height:68px;margin:0}
+  .brand .brand-title{grid-column:2;grid-row:1;font-size:23px;align-self:end}
+  .brand span:last-child{grid-column:2;grid-row:2;font-size:12px;align-self:start}
+  nav{scrollbar-width:thin;scrollbar-color:#74a2f066 transparent}
+  .nav-button{white-space:nowrap}
+}
+
+/* Persian date picker follows the dashboard palette and works without a CDN. */
+.jalali-field{display:flex;flex-direction:column;gap:7px;min-width:0}
+.jalali-field>label{display:block}
+.jalali-input-row{display:flex;flex-direction:column;gap:8px}
+.jalali-input-row input{cursor:pointer;text-align:center}
+.jalali-input-row .button{width:100%}
+.jalali-dialog{width:min(380px,calc(100vw - 24px));max-height:calc(100dvh - 24px);overflow:auto;padding:22px;border:1px solid #74a2f088;border-radius:14px;background:#191919;color:#ffffff;box-shadow:0 24px 60px #0009;direction:rtl}
+.jalali-dialog::backdrop{background:#000a;backdrop-filter:blur(3px)}
+.jalali-calendar-header,.jalali-dialog-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.jalali-calendar-header{margin-bottom:15px}
+.jalali-calendar-header strong{font-size:18px}
+.jalali-calendar-header .button{width:38px;height:38px;padding:0;font-size:23px}
+.jalali-weekdays,.jalali-days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;text-align:center}
+.jalali-weekdays{margin-bottom:8px;color:#74a2f0;font-size:12px}
+.jalali-empty{display:block}
+.jalali-day{width:100%;aspect-ratio:1;border:1px solid transparent;border-radius:8px;background:transparent;color:#ffffff;font-size:14px}
+.jalali-day:hover{background:#74a2f022;border-color:#74a2f088}
+.jalali-day.today{border-color:#74a2f0}
+.jalali-day.selected,.jalali-day.selected:hover{background:#0652dd;border-color:#0652dd;color:#ffffff}
+.jalali-dialog-actions{margin-top:18px}

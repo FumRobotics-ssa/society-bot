@@ -170,7 +170,7 @@ async function route(request, env, ctx) {
     return html(page(ticketHTML(row, env)));
   }
   if (url.pathname === '/') return Response.redirect(new URL('/admin', request.url), 302);
-  const assets = ['/admin', '/admin.html', '/admin.js', '/grid.js', '/style.css', '/ticket.css', '/logo.png'];
+  const assets = ['/admin', '/admin.html', '/admin.js', '/jalali.js', '/grid.js', '/style.css', '/ticket.css', '/logo.png'];
   if (!assets.includes(url.pathname) && !/^\/fonts\/(?:Meem-[A-Za-z]+\.ttf|fontawesome-webfont\.woff2)$/.test(url.pathname)) fail('مسیر پیدا نشد', 404);
   const asset = new URL(request.url); if (url.pathname === '/admin') asset.pathname = '/admin.html';
   return env.ASSETS.fetch(new Request(asset, request));

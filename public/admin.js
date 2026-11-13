@@ -1,3 +1,5 @@
+import { formatJalaliDate, jalaliFirstWeekday, jalaliMonthLength, jalaliMonths, jalaliTimeToIso, parseJalaliDate, persianNumber, tehranDateTime } from './jalali.js';
+
 /* Admin credentials live only in an HttpOnly server session; no persistent browser tokens. */
 const $ = (id) => document.getElementById(id);
 const state = { me: null, view: 'overview', events: [], places: [], camera: null, timer: null, loading: 0, pages: { orders: 0, tickets: 0, users: 0 } };
@@ -37,14 +39,50 @@ function badge(status) {
 function date(value) {
   if (!value) return 'زمان تعیین نشده';
   const d = new Date(typeof value === 'number' && value < 100000000000 ? value * 1000 : value);
-  return Number.isNaN(d.getTime()) ? String(value) : new Intl.DateTimeFormat('fa-IR', { dateStyle: 'medium', timeStyle: 'short' }).format(d);
+  return Number.isNaN(d.getTime()) ? String(value) : new Intl.DateTimeFormat('fa-IR-u-ca-persian', { timeZone: 'Asia/Tehran', dateStyle: 'medium', timeStyle: 'short' }).format(d);
 }
-function localDate(value) {
-  if (!value) return '';
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return '';
-  const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
-  return local.toISOString().slice(0, 16);
+const calendar = { year: 0, month: 0 };
+function selectedJalaliDate() {
+  try { return parseJalaliDate($('event-jalali-date').value); } catch { return null; }
+}
+function renderJalaliCalendar(focusDay = null) {
+  const { year, month } = calendar;
+  $('jalali-dialog-title').textContent = `${jalaliMonths[month - 1]} ${persianNumber(year)}`;
+  const days = $('jalali-days');
+  days.replaceChildren();
+  for (let i = 0; i < jalaliFirstWeekday(year, month); i++) days.append(el('span', null, 'jalali-empty'));
+  const selected = selectedJalaliDate();
+  const today = tehranDateTime();
+  for (let day = 1; day <= jalaliMonthLength(year, month); day++) {
+    const current = selected?.year === year && selected?.month === month && selected?.day === day;
+    const isToday = today.year === year && today.month === month && today.day === day;
+    const item = el('button', persianNumber(day), 'jalali-day' + (current ? ' selected' : '') + (isToday ? ' today' : ''));
+    item.type = 'button'; item.dataset.day = String(day);
+    item.setAttribute('aria-label', `${persianNumber(day)} ${jalaliMonths[month - 1]} ${persianNumber(year)}`);
+    item.setAttribute('aria-pressed', String(Boolean(current)));
+    item.addEventListener('click', () => chooseJalaliDate(day));
+    days.append(item);
+  }
+  if (focusDay) days.querySelector(`[data-day="${focusDay}"]`)?.focus();
+}
+function chooseJalaliDate(day) {
+  $('event-jalali-date').value = formatJalaliDate({ year: calendar.year, month: calendar.month, day });
+  $('jalali-dialog').close();
+  $('event-jalali-date').focus();
+}
+function shiftJalaliMonth(amount, focusDay = 1) {
+  const index = calendar.year * 12 + calendar.month - 1 + amount;
+  const year = Math.floor(index / 12), month = index - year * 12 + 1;
+  if (year < 1200 || year > 1700) return;
+  calendar.year = year; calendar.month = month;
+  renderJalaliCalendar(Math.min(focusDay, jalaliMonthLength(year, month)));
+}
+function openJalaliCalendar() {
+  const selected = selectedJalaliDate() || tehranDateTime();
+  calendar.year = selected.year; calendar.month = selected.month;
+  renderJalaliCalendar();
+  $('jalali-dialog').showModal();
+  $('jalali-days').querySelector(`[data-day="${selected.day}"]`)?.focus();
 }
 async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
@@ -170,7 +208,9 @@ function editEvent(event = null) {
   ['name', 'description', 'place_id', 'capacity', 'max_per_user', 'price', 'payment_instructions'].forEach((key) => { form.elements.namedItem(key).value = event?.[key] ?? (key === 'max_per_user' ? 1 : key === 'price' ? 0 : ''); });
   form.elements.namedItem('active').checked = event ? yes(event.active) : true;
   form.elements.namedItem('is_paid').checked = yes(event?.is_paid);
-  form.elements.namedItem('starts_at').value = localDate(event?.starts_at);
+  const when = event?.starts_at ? tehranDateTime(event.starts_at) : null;
+  $('event-jalali-date').value = when ? formatJalaliDate(when) : '';
+  form.elements.namedItem('starts_at_time').value = when ? `${String(when.hour).padStart(2, '0')}:${String(when.minute).padStart(2, '0')}` : '';
   form.hidden = false; form.scrollIntoView({ behavior: 'smooth', block: 'start' }); form.elements.namedItem('name').focus();
 }
 function showPlaces() {
@@ -326,11 +366,36 @@ $('retry-session').addEventListener('click', () => action($('retry-session'), se
 $('logout').addEventListener('click', () => action($('logout'), async () => { await api('/api/logout', { method: 'POST' }); state.me = null; showLogin('از حساب خارج شدید برای ورود دوباره لینک تازه بگیرید'); }));
 $('new-event').addEventListener('click', () => editEvent());
 $('cancel-event').addEventListener('click', () => { $('event-form').hidden = true; });
+$('jalali-open').addEventListener('click', openJalaliCalendar);
+$('event-jalali-date').addEventListener('click', openJalaliCalendar);
+$('event-jalali-date').addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openJalaliCalendar(); } });
+$('jalali-prev').addEventListener('click', () => shiftJalaliMonth(-1));
+$('jalali-next').addEventListener('click', () => shiftJalaliMonth(1));
+$('jalali-today').addEventListener('click', () => { const today = tehranDateTime(); calendar.year = today.year; calendar.month = today.month; chooseJalaliDate(today.day); });
+$('jalali-close').addEventListener('click', () => $('jalali-dialog').close());
+$('jalali-dialog').addEventListener('click', (event) => { if (event.target === $('jalali-dialog')) $('jalali-dialog').close(); });
+$('jalali-dialog').addEventListener('keydown', (event) => {
+  const current = document.activeElement?.dataset?.day;
+  if (!current) return;
+  const step = { ArrowLeft: 1, ArrowRight: -1, ArrowDown: 7, ArrowUp: -7 }[event.key];
+  if (step === undefined) return;
+  event.preventDefault();
+  const next = Number(current) + step, length = jalaliMonthLength(calendar.year, calendar.month);
+  if (next < 1) {
+    const previousYear = calendar.month === 1 ? calendar.year - 1 : calendar.year;
+    const previousMonth = calendar.month === 1 ? 12 : calendar.month - 1;
+    if (previousYear >= 1200) shiftJalaliMonth(-1, jalaliMonthLength(previousYear, previousMonth) + next);
+  }
+  else if (next > length) shiftJalaliMonth(1, next - length);
+  else $('jalali-days').querySelector(`[data-day="${next}"]`)?.focus();
+});
 $('event-form').addEventListener('submit', (event) => {
   event.preventDefault(); const form = event.currentTarget; const values = new FormData(form);
   action(event.submitter, async () => {
     const id = values.get('id');
-    const body = { name: values.get('name').trim(), description: values.get('description').trim(), place_id: values.get('place_id') ? Number(values.get('place_id')) : null, capacity: Number(values.get('capacity')), max_per_user: Number(values.get('max_per_user')), price: values.has('is_paid') ? Number(values.get('price')) : 0, payment_instructions: values.get('payment_instructions').trim(), starts_at: new Date(values.get('starts_at')).toISOString(), is_paid: values.has('is_paid'), active: values.has('active') };
+    const chosenDate = parseJalaliDate(values.get('starts_at_jalali'));
+    const startsAt = jalaliTimeToIso(chosenDate, values.get('starts_at_time'));
+    const body = { name: values.get('name').trim(), description: values.get('description').trim(), place_id: values.get('place_id') ? Number(values.get('place_id')) : null, capacity: Number(values.get('capacity')), max_per_user: Number(values.get('max_per_user')), price: values.has('is_paid') ? Number(values.get('price')) : 0, payment_instructions: values.get('payment_instructions').trim(), starts_at: startsAt, is_paid: values.has('is_paid'), active: values.has('active') };
     await api('/api/events' + (id ? '/' + encodeURIComponent(id) : ''), { method: id ? 'PATCH' : 'POST', body });
     form.hidden = true; await load(); toast('رویداد ذخیره شد');
   });

@@ -56,7 +56,7 @@ function eventTime(value) {
   if (!value) return 'اعلام نشده';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
-  return new Intl.DateTimeFormat('fa-IR', { timeZone: 'Asia/Tehran', calendar: 'gregory', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(date);
+  return new Intl.DateTimeFormat('fa-IR', { timeZone: 'Asia/Tehran', calendar: 'persian', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(date);
 }
 function eventText(event) {
   return [event.name, event.description || '', `شناسه: ${event.id}`, `مکان: ${event.place_name || 'بدون مکان مشخص'}`, event.address || event.place_address ? `نشانی: ${event.address || event.place_address}` : '', neshanUrl(event.place_map_url) ? `موقعیت در نشان: ${neshanUrl(event.place_map_url)}` : '', `زمان: ${eventTime(event.starts_at)}`, `ظرفیت: ${event.capacity}`, event.remaining != null ? `ظرفیت باقی‌مانده: ${event.remaining}` : '', `سقف بلیت برای هر نفر: ${event.max_per_user}`, event.is_paid ? `قیمت هر بلیت: ${money(event.price)} تومان` : 'قیمت: رایگان', `وضعیت: ${event.active ? 'فعال' : 'غیرفعال'}`].filter(Boolean).join('\n');

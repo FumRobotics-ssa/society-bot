@@ -7,7 +7,7 @@
   <meta name="referrer" content="no-referrer">
   <title>انجمن علمی رباتیک دانشگاه فردوسی مشهد · مدیریت رویدادها</title>
   <link rel="stylesheet" href="/style.css">
-  <script src="/admin.js" defer></script>
+  <script type="module" src="/admin.js"></script>
   <script src="/grid.js" defer></script>
 </head>
 <body>
@@ -59,7 +59,8 @@
           <div class="form-grid">
             <label>نام رویداد<input name="name" required maxlength="200"></label>
             <label>مکان<select name="place_id" id="event-place"><option value="">انتخاب مکان</option></select></label>
-            <label>زمان شروع<input name="starts_at" type="datetime-local" required><small>زمان با ساعت محلی دستگاه شما ثبت می‌شود</small></label>
+            <div class="jalali-field"><label for="event-jalali-date">تاریخ شروع</label><div class="jalali-input-row"><input id="event-jalali-date" name="starts_at_jalali" type="text" dir="ltr" readonly placeholder="تاریخ شمسی را انتخاب کنید" aria-haspopup="dialog" aria-controls="jalali-dialog"><button id="jalali-open" class="button secondary" type="button">تقویم شمسی</button></div><small>تاریخ به هجری شمسی نمایش داده می‌شود</small></div>
+            <label>ساعت شروع به وقت مشهد<input name="starts_at_time" type="time" required><small>زمان رویداد به وقت مشهد ثبت می‌شود</small></label>
             <label>ظرفیت<input name="capacity" type="number" min="1" max="100000" required></label>
             <label>حداکثر بلیت هر نفر<input name="max_per_user" type="number" min="1" max="100" value="1" required></label>
             <label>قیمت هر بلیت به تومان<input name="price" type="number" min="0" step="1" value="0" required></label>
@@ -69,6 +70,7 @@
             <label class="full">راهنمای پرداخت دستی<textarea name="payment_instructions" rows="3" maxlength="1500" placeholder="شماره کارت و نام صاحب حساب و توضیحات ارسال رسید"></textarea></label>
           </div><div class="form-actions"><button class="button" type="submit">ذخیره رویداد</button></div>
         </form>
+        <dialog id="jalali-dialog" class="jalali-dialog" aria-labelledby="jalali-dialog-title"><div class="jalali-calendar-header"><button id="jalali-prev" class="button secondary small" type="button" aria-label="ماه قبل">›</button><strong id="jalali-dialog-title" aria-live="polite"></strong><button id="jalali-next" class="button secondary small" type="button" aria-label="ماه بعد">‹</button></div><div class="jalali-weekdays" aria-hidden="true"><span>ش</span><span>ی</span><span>د</span><span>س</span><span>چ</span><span>پ</span><span>ج</span></div><div id="jalali-days" class="jalali-days" role="group" aria-label="روزهای ماه"></div><div class="jalali-dialog-actions"><button id="jalali-today" class="button secondary" type="button">امروز</button><button id="jalali-close" class="button secondary" type="button">بستن</button></div></dialog>
         <div id="events-list" class="event-grid"></div>
       </section>
       <section id="view-places" data-panel="places" hidden>
