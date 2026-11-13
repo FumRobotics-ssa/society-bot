@@ -1,5 +1,13 @@
 import { Store } from './store.js';
 
+export function backupDate(at = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Tehran', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(at);
+  const date = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return `${date.year}-${date.month}-${date.day}`;
+}
+
 export async function exportBackup(env) {
   const tables = ['users', 'places', 'events', 'orders', 'tickets', 'legacy_events', 'legacy_event_participants', 'admins', 'audit_log'];
   const result = await env.DB.batch(tables.map(table => env.DB.prepare(`SELECT * FROM ${table} LIMIT 10001`)));
@@ -44,9 +52,9 @@ export async function putS3(env, key, content) {
   }, signal: AbortSignal.timeout(15000) });
   if (!response.ok) throw new Error(`Private S3 backup failed with HTTP ${response.status}`);
 }
-export async function runBackup(env, key) {
+export async function runBackup(env, key, at = new Date()) {
   const snapshot = await exportBackup(env);
-  const filename = `robotics-society-${new Date().toISOString().slice(0, 10)}.json`;
+  const filename = `robotics-society-${backupDate(at)}.json`;
   if (env.S3_BUCKET) {
     for (const field of ['S3_ENDPOINT', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY']) if (!env[field]) throw new Error(`Missing ${field}`);
     await putS3(env, `backups/${key}/${filename}`, snapshot);

@@ -76,9 +76,9 @@ test('JSON backup restore preserves ticket token and excludes sessions and admin
 });
 test('daily backup filename has only project name and date', async () => {
   const db = createDatabase(); db.exec(schema);
-  await runBackup({ DB: db, BACKUP_CHAT: '-100456' }, 'backup:2026-11-13');
+  await runBackup({ DB: db, BACKUP_CHAT: '-100456' }, 'manual:2026-11-14', new Date('2026-11-13T21:16:00Z'));
   const rows = await db.prepare("SELECT payload FROM outbox WHERE method='sendDocument'").all();
   assert.equal(rows.results.length, 1);
-  assert.match(JSON.parse(rows.results[0].payload).filename, /^robotics-society-\d{4}-\d{2}-\d{2}\.json$/);
+  assert.equal(JSON.parse(rows.results[0].payload).filename, 'robotics-society-2026-11-14.json');
   db.close();
 });
