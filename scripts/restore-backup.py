@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate a siahe JSON snapshot and emit SQL for a NEW EMPTY database only.
+"""Validate a Robotics Society JSON snapshot and emit SQL for a NEW EMPTY database only.
 
 No database is modified. Admin roles are excluded unless explicitly requested.
 Sessions, tokens, inbox and outbox must never be restored as executable state.
@@ -29,8 +29,8 @@ FIELDS = {
 
 
 def validate_snapshot(snapshot, include_admins=False):
-    if not isinstance(snapshot, dict) or snapshot.get("format") != "siahe-json" or snapshot.get("version") != 1:
-        raise ValueError("Not a supported siahe-json version 1 snapshot")
+    if not isinstance(snapshot, dict) or snapshot.get("format") not in {"siahe-json", "robotics-society-json"} or snapshot.get("version") != 1:
+        raise ValueError("Not a supported Robotics Society or legacy version 1 snapshot")
     if set(snapshot) - {"format", "version", "created_at", "tables"}:
         raise ValueError("Unknown top level snapshot fields")
     tables = snapshot.get("tables")
@@ -57,7 +57,7 @@ def validate_snapshot(snapshot, include_admins=False):
             # Validate excluded admin rows too, then deliberately omit their privileges.
             if table != "admins" or include_admins:
                 sql.append(legacy.insert(table, {column: row[column] for column in columns.split()}))
-    sql.append("DROP TABLE __siahe_empty_guard;")
+    sql.append("DROP TABLE __robotics_empty_guard;")
     text = "\n".join(sql) + "\n"
     check = sqlite3.connect(":memory:")
     try:

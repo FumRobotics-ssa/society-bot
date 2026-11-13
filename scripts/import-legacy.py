@@ -60,8 +60,8 @@ def empty_guard():
     return [
         "-- Apply only to a NEW database after migrations/0001_init.sql",
         "-- The first constraint deliberately aborts if the destination is not empty",
-        "CREATE TABLE __siahe_empty_guard (empty INTEGER CHECK(empty=1));",
-        f"INSERT INTO __siahe_empty_guard SELECT CASE WHEN ({counts})=0 THEN 1 ELSE 0 END;",
+        "CREATE TABLE __robotics_empty_guard (empty INTEGER CHECK(empty=1));",
+        f"INSERT INTO __robotics_empty_guard SELECT CASE WHEN ({counts})=0 THEN 1 ELSE 0 END;",
     ]
 
 
@@ -189,7 +189,7 @@ def make_migration(data, keep_active=False):
     sql = empty_guard()
     for table, items in rows.items():
         sql.extend(insert(table, row) for row in items)
-    sql.append("DROP TABLE __siahe_empty_guard;")
+    sql.append("DROP TABLE __robotics_empty_guard;")
     text = "\n".join(sql) + "\n"
     # Full validation happens in an isolated throwaway database before any output is written.
     check = sqlite3.connect(":memory:")

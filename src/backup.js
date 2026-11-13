@@ -8,7 +8,7 @@ export async function exportBackup(env) {
     if (result[i].results.length > 10000) throw new Error('Snapshot limit exceeded — use a full D1 export or SQLite backup');
     data[table] = result[i].results;
   });
-  const text = JSON.stringify({ format: 'siahe-json', version: 1, created_at: new Date().toISOString(), tables: data });
+  const text = JSON.stringify({ format: 'robotics-society-json', version: 1, created_at: new Date().toISOString(), tables: data });
   if (new TextEncoder().encode(text).length > 8 * 1024 * 1024) throw new Error('Snapshot larger than 8 MB — use full database export');
   return text;
 }
@@ -46,10 +46,10 @@ export async function putS3(env, key, content) {
 }
 export async function runBackup(env, key) {
   const snapshot = await exportBackup(env);
-  const filename = `siahe-${new Date().toISOString().slice(0, 10)}-${key}.json`;
+  const filename = `robotics-society-${new Date().toISOString().slice(0, 10)}.json`;
   if (env.S3_BUCKET) {
     for (const field of ['S3_ENDPOINT', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY']) if (!env[field]) throw new Error(`Missing ${field}`);
-    await putS3(env, `backups/${filename}`, snapshot);
+    await putS3(env, `backups/${key}/${filename}`, snapshot);
   }
   if (env.BACKUP_CHAT) await new Store(env.DB).enqueue('sendDocument', { chat_id: env.BACKUP_CHAT, _documentText: snapshot, filename, caption: 'نسخه پشتیبان محرمانه انجمن علمی رباتیک' }, `backup-file:${key}`);
 }

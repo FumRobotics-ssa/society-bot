@@ -136,7 +136,7 @@ async function api(request, env, store, url) {
   if (path === '/api/expire' && method === 'POST') { await store.expireOrders(); return json({ ok: true }); }
   if (path === '/api/backup' && method === 'GET') {
     await store.audit(session.user_id, 'backup.export', 'database', {});
-    return download(await exportBackup(env), `siahe-backup-${new Date().toISOString().slice(0, 10)}.json`, 'application/json');
+    return download(await exportBackup(env), `robotics-society-${new Date().toISOString().slice(0, 10)}.json`, 'application/json');
   }
   if (path.startsWith('/api/admins')) {
     if (session.role !== 'owner') fail('فقط مالک میتواند دسترسی مدیران را تغییر دهد', 403);
@@ -153,7 +153,7 @@ async function api(request, env, store, url) {
 
 async function route(request, env, ctx) {
   const url = new URL(request.url), store = new Store(env.DB);
-  if (url.pathname === '/health' && request.method === 'GET') return json({ ok: true, app: 'siahe' });
+  if (url.pathname === '/health' && request.method === 'GET') return json({ ok: true, app: 'robotics-society' });
   if (url.pathname === '/telegram' && request.method === 'POST') {
     if (!env.BOT_TOKEN || !env.WEBHOOK_SECRET || !await safeEqual(request.headers.get('X-Telegram-Bot-Api-Secret-Token'), env.WEBHOOK_SECRET)) return json({ error: 'Forbidden' }, 403);
     const update = await body(request, 262144);

@@ -57,7 +57,7 @@ const interval = setInterval(async () => {
   catch { console.error('Job maintenance failed — inspect database and configuration'); }
   finally { running = false; }
 }, 2000);
-server.listen(Number(process.env.PORT || 8787), process.env.HOST || '127.0.0.1', () => console.log('Siahe is running on configured host and port'));
+server.listen(Number(process.env.PORT || 8787), process.env.HOST || '127.0.0.1', () => console.log('Robotics Society bot is running on configured host and port'));
 async function shutdown() {
   clearInterval(interval); server.close();
   await Promise.allSettled([...tasks]);
