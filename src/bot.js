@@ -45,17 +45,23 @@ function stateData(state) {
 }
 function userText(user) {
   const p = profileOf(user);
-  const fields = [`شناسه ${user.id}`, `نام ${user.first_name || ''} ${user.last_name || ''}`, `تلفن ${user.phone || 'ثبت نشده'}`];
-  for (const [key, title] of [['is_fum_student', 'دانشجوی فردوسی'], ['is_student', 'دانشجو'], ['is_mashhad_student', 'دانشجوی مشهد'], ['is_graduate_student', 'فارغ التحصیل'], ['is_student_relative', 'خانواده فردوسی'], ['university_name', 'دانشگاه'], ['student_number', 'شماره دانشجویی'], ['fum_faculty', 'دانشکده'], ['entrance_year', 'سال ورود'], ['is_mast_phd', 'تحصیلات تکمیلی'], ['student_major', 'رشته']]) {
-    if (p[key] !== undefined && p[key] !== '') fields.push(`${title} ${typeof p[key] === 'boolean' || typeof p[key] === 'number' && key.startsWith('is_') ? p[key] ? 'بله' : 'خیر' : p[key]}`);
+  const fields = [`شناسه: ${user.id}`, `نام و نام خانوادگی: ${[user.first_name, user.last_name].filter(Boolean).join(' ') || 'ثبت نشده'}`, `تلفن: ${user.phone || 'ثبت نشده'}`];
+  for (const [key, title] of [['is_fum_student', 'دانشجوی دانشگاه فردوسی مشهد؟'], ['is_student', 'دانشجو هستید؟'], ['is_mashhad_student', 'در دانشگاهی در مشهد تحصیل می‌کنید؟'], ['is_graduate_student', 'فارغ‌التحصیل هستید؟'], ['is_student_relative', 'عضو خانواده دانشجویان یا کارکنان فردوسی هستید؟'], ['university_name', 'دانشگاه'], ['student_number', 'شماره دانشجویی'], ['fum_faculty', 'دانشکده'], ['entrance_year', 'سال ورود'], ['is_mast_phd', 'دانشجوی کارشناسی ارشد یا دکتری هستید؟'], ['student_major', 'رشته']]) {
+    if (p[key] !== undefined && p[key] !== '' && !(p.is_fum_student && ['is_student', 'is_mashhad_student', 'university_name'].includes(key))) fields.push(`${title}${key.startsWith('is_') ? '' : ':'} ${typeof p[key] === 'boolean' || typeof p[key] === 'number' && key.startsWith('is_') ? p[key] ? 'بله' : 'خیر' : p[key]}`);
   }
   return fields.join('\n');
 }
+function eventTime(value) {
+  if (!value) return 'اعلام نشده';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat('fa-IR', { timeZone: 'Asia/Tehran', calendar: 'gregory', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(date);
+}
 function eventText(event) {
-  return [`${event.name}`, event.description || '', `شناسه ${event.id}`, `مکان ${event.place_name || event.place_id || ''}`, event.address || event.place_address || '', event.starts_at ? `زمان ${event.starts_at}` : '', `ظرفیت ${event.capacity}`, event.remaining != null ? `ظرفیت باقی مانده ${event.remaining}` : '', `سقف هر نفر ${event.max_per_user}`, event.is_paid ? `قیمت هر بلیت ${money(event.price)} تومان` : 'رایگان', `وضعیت ${event.active ? 'فعال' : 'غیرفعال'}`].filter(Boolean).join('\n');
+  return [event.name, event.description || '', `شناسه: ${event.id}`, `مکان: ${event.place_name || 'بدون مکان مشخص'}`, event.address || event.place_address ? `نشانی: ${event.address || event.place_address}` : '', `زمان: ${eventTime(event.starts_at)}`, `ظرفیت: ${event.capacity}`, event.remaining != null ? `ظرفیت باقی‌مانده: ${event.remaining}` : '', `سقف بلیت برای هر نفر: ${event.max_per_user}`, event.is_paid ? `قیمت هر بلیت: ${money(event.price)} تومان` : 'قیمت: رایگان', `وضعیت: ${event.active ? 'فعال' : 'غیرفعال'}`].filter(Boolean).join('\n');
 }
 function orderText(order) {
-  return `${order.event_name || 'رویداد'}\nشناسه سفارش ${order.id}\nتعداد ${order.quantity}\nوضعیت ${STATUS[order.status] || order.status}`;
+  return `${order.event_name || 'رویداد'}\nشناسه سفارش: ${order.id}\nتعداد بلیت: ${order.quantity}\nوضعیت: ${STATUS[order.status] || order.status}`;
 }
 function csv(rows, columns) {
   const cell = v => {
@@ -99,7 +105,7 @@ export async function handleUpdate(update, env, store) {
   const needAccount = async () => {
     const user = await store.getUser(from.id);
     if (!user?.phone) {
-      await send('برای ادامه ابتدا با دستور /add_account ثبت نام کنید');
+      await send('برای ادامه ابتدا با دستور /add_account ثبت‌نام کنید');
       return null;
     }
     return user;
@@ -116,7 +122,7 @@ export async function handleUpdate(update, env, store) {
   const selectEvent = async eventId => {
     if (!await needAccount()) return;
     const event = await store.getEvent(positive(eventId));
-    if (!event || !event.active || event.archived) return send('این رویداد موجود نیست یا ثبت نام آن متوقف شده');
+    if (!event || !event.active || event.archived) return send('این رویداد موجود نیست یا ثبت‌نام آن متوقف شده است');
     if (event.is_paid && !env.VERIFICATION_CHAT) return send('ثبت نام رویدادهای پولی تا تنظیم گروه بررسی پرداخت متوقف است');
     await send(eventText(event) + '\n\nتعداد بلیت مورد نظر را وارد کنید\nبرای توقف /cancel را بفرستید');
     await store.setState(from.id, 'reserve_quantity', { event_id: event.id, last_update_id: update.update_id });
@@ -238,7 +244,7 @@ export async function handleUpdate(update, env, store) {
             `مبلغ کل ${money(Number(order.unit_price) * Number(order.quantity))} تومان`,
           ].join('\n');
           await store.enqueue(photo ? 'sendPhoto' : 'sendDocument', { chat_id: env.VERIFICATION_CHAT, [photo ? 'photo' : 'document']: order.receipt_file_id, caption: receiptCaption, reply_markup: { inline_keyboard: [[{ text: 'تأیید پرداخت', callback_data: `r:${order.id}:y` }, { text: 'رد درخواست', callback_data: `r:${order.id}:n` }]] } }, `receipt:${order.id}:${order.receipt_file_id}`);
-          await send('رسید شما برای بررسی فرستاده شد\nنتیجه از همین ربات اطلاع داده میشود', MENU);
+          await send('رسید شما برای بررسی فرستاده شد\nنتیجه از همین ربات به شما اطلاع داده می‌شود', MENU);
           await store.setState(from.id, 'idle', { last_update_id: update.update_id });
           return;
         }
@@ -251,7 +257,7 @@ export async function handleUpdate(update, env, store) {
     if (command === 'start') {
       if (/^getTicket_\d+$/.test(arg)) return selectEvent(arg.slice(10));
       if (arg === 'availableEvents') return showEvents();
-      return send('به سامانه ثبت نام رویدادها خوش آمدید\nبرای شروع /add_account و برای دیدن رویدادها /available_events را بفرستید', MENU);
+      return send('به سامانه ثبت‌نام رویدادها خوش آمدید\nبرای ساخت حساب /add_account و برای دیدن رویدادها /available_events را بفرستید', MENU);
     }
     if (command === 'id') return send(`شناسه تلگرام شما ${from.id}`);
     if (command === 'help') return send('ثبت نام /add_account\nاطلاعات حساب /get_account\nرویدادها /available_events\nسفارشها و بلیتهای من /my_tickets\nشناسه گفتگو /chatid\nتوقف مرحله جاری /cancel\nحذف اطلاعات حساب /delete_account' + (isChecker ? '\nپنل مدیریت /admin\nبرای راهنمای مدیر /admin_help' : ''), MENU);
@@ -262,7 +268,7 @@ export async function handleUpdate(update, env, store) {
     }
     if (command === 'add_account') {
       const user = await store.getUser(from.id);
-      if (user?.phone) return send('قبلا ثبت نام کرده‌اید\nبرای دیدن اطلاعات /get_account را بفرستید');
+      if (user?.phone) return send('قبلاً ثبت‌نام کرده‌اید\nبرای دیدن اطلاعات /get_account را بفرستید');
       return transition('signup:first_name', { profile: {}, username: from.username || '' }, 'نام خود را وارد کنید');
     }
     if (command === 'get_account') {
@@ -430,13 +436,19 @@ export async function handleUpdate(update, env, store) {
   async function signupStep(step, input, data, isCallback) {
     const p = { ...(data.profile || {}) };
     const d = { ...data, profile: p };
-    const next = (target, prompt, markup) => transition(`signup:${target}`, d, prompt, markup);
+    const next = async (target, prompt, markup) => {
+      if (isCallback && callback?.message?.message_id) {
+        const choice = step === 'gender' ? `جنسیت: ${input === 'boy' ? 'آقا' : 'خانم'}` : step === 'fum_faculty' ? `دانشکده: ${p.fum_faculty}` : `پاسخ: ${input === 'yes' ? 'بله' : 'خیر'}`;
+        await store.enqueue('editMessageText', { chat_id: chat.id, message_id: callback.message.message_id, text: `${callback.message.text || 'انتخاب شما'}\n\n✅ ${choice}`, reply_markup: { inline_keyboard: [] } }, `${updateKey}:choice`);
+      }
+      return transition(`signup:${target}`, d, prompt, markup);
+    };
     const askYesNo = (target, prompt) => next(target, prompt, { inline_keyboard: YES_NO });
     const bool = () => {
       if (!isCallback || !['yes', 'no'].includes(input)) throw new Error('از دکمه بله یا خیر استفاده کنید');
       return input === 'yes';
     };
-    const confirm = () => next('confirm', `اطلاعات زیر را تأیید میکنید\n\n${userText({ ...d, id: from.id })}`, { inline_keyboard: YES_NO });
+    const confirm = () => next('confirm', `اطلاعات زیر را تأیید می‌کنید؟\n\n${userText({ ...d, id: from.id })}`, { inline_keyboard: YES_NO });
     if (step === 'first_name') {
       if (isCallback) throw new Error('نام خود را به صورت متن بفرستید');
       d.first_name = name(input);
@@ -457,7 +469,7 @@ export async function handleUpdate(update, env, store) {
     if (step === 'gender') {
       if (!isCallback || !['boy', 'girl'].includes(input)) throw new Error('از دکمه‌ها استفاده کنید');
       p.is_boy = input === 'boy';
-      return askYesNo('is_fum_student', 'دانشجوی دانشگاه فردوسی مشهد هستید');
+      return askYesNo('is_fum_student', 'دانشجوی دانشگاه فردوسی مشهد هستید؟');
     }
     if (step === 'is_fum_student') {
       p.is_fum_student = bool();
@@ -465,7 +477,7 @@ export async function handleUpdate(update, env, store) {
         Object.assign(p, { is_student: true, is_mashhad_student: true, university_name: 'دانشگاه فردوسی مشهد', is_graduate_student: false, is_student_relative: false });
         return next('student_number', 'شماره دانشجویی خود را وارد کنید');
       }
-      return askYesNo('is_student', 'دانشجو هستید');
+      return askYesNo('is_student', 'دانشجو هستید؟');
     }
     if (step === 'student_number') {
       const number = digits(input);
@@ -480,7 +492,7 @@ export async function handleUpdate(update, env, store) {
     }
     if (step === 'is_student') {
       p.is_student = bool();
-      return p.is_student ? askYesNo('is_mashhad_student', 'در یکی از دانشگاههای مشهد تحصیل میکنید') : askYesNo('is_graduate_student', 'فارغ التحصیل دانشگاه هستید');
+      return p.is_student ? askYesNo('is_mashhad_student', 'در دانشگاهی در مشهد تحصیل می‌کنید؟') : askYesNo('is_graduate_student', 'فارغ التحصیل دانشگاه هستید');
     }
     if (step === 'is_mashhad_student') {
       p.is_mashhad_student = bool();
@@ -495,7 +507,7 @@ export async function handleUpdate(update, env, store) {
       const year = Number(digits(input));
       if (isCallback || !Number.isInteger(year) || !(year >= 1300 && year <= 1500 || year >= 1900 && year <= 2100)) throw new Error('سال ورود را به صورت سال چهار رقمی وارد کنید');
       p.entrance_year = String(year);
-      return askYesNo('is_mast_phd', 'دانشجوی کارشناسی ارشد یا دکتری هستید');
+      return askYesNo('is_mast_phd', 'دانشجوی کارشناسی ارشد یا دکتری هستید؟');
     }
     if (step === 'is_mast_phd') {
       p.is_mast_phd = bool();
@@ -508,7 +520,7 @@ export async function handleUpdate(update, env, store) {
     }
     if (step === 'is_graduate_student') {
       p.is_graduate_student = bool();
-      return askYesNo('is_student_relative', 'از خانواده دانشجویان یا کارکنان دانشگاه فردوسی هستید');
+      return askYesNo('is_student_relative', 'عضو خانواده دانشجویان یا کارکنان دانشگاه فردوسی هستید؟');
     }
     if (step === 'is_student_relative') {
       p.is_student_relative = bool();
@@ -516,11 +528,11 @@ export async function handleUpdate(update, env, store) {
     }
     if (step === 'confirm') {
       if (!bool()) {
-        await send('ثبت نام لغو شد\nبرای شروع دوباره /add_account را بفرستید', MENU);
+        await send('ثبت‌نام لغو شد\nبرای شروع دوباره /add_account را بفرستید', MENU);
         return store.setState(from.id, 'idle', { last_update_id: update.update_id });
       }
       await store.upsertUser({ id: from.id, username: from.username || d.username, first_name: d.first_name, last_name: d.last_name, phone: d.phone, profile: p });
-      await send('ثبت نام شما انجام شد\nبرای انتخاب رویداد /available_events را بفرستید', MENU);
+      await send('ثبت‌نام شما انجام شد\nبرای انتخاب رویداد /available_events را بفرستید', MENU);
       return store.setState(from.id, 'idle', { last_update_id: update.update_id });
     }
     throw new Error('این مرحله معتبر نیست با /cancel متوقف کنید و دوباره ثبت نام کنید');

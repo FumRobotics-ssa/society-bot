@@ -70,3 +70,21 @@ test('daily backup catches up after midnight and queues only once per UTC day', 
   assert.equal((await f.db.prepare("SELECT id FROM outbox WHERE method='__backup'").all()).results.length, 2);
   f.db.close();
 });
+
+
+test('signup choice closes its keyboard and confirms the selected value', async () => {
+  const f = setup();
+  await f.send('/add_account');
+  await f.send('علی');
+  await f.send('محمدی');
+  await handleUpdate(f.message('', { contact: { user_id: 1, phone_number: '09123456789' } }), f.env, f.store);
+  const choice = f.callback('s:boy');
+  choice.callback_query.message.text = 'جنسیت را انتخاب کنید';
+  await handleUpdate(choice, f.env, f.store);
+  const edits = (await f.db.prepare("SELECT payload FROM outbox WHERE method='editMessageText'").all()).results;
+  assert.equal(edits.length, 1);
+  const edited = JSON.parse(edits[0].payload);
+  assert.match(edited.text, /✅ جنسیت: آقا/);
+  assert.deepEqual(edited.reply_markup, { inline_keyboard: [] });
+  f.db.close();
+});
