@@ -26,6 +26,23 @@ test('complete signup persists profile and rejects another persons contact', asy
   await f.click('s:boy'); await f.click('s:no'); await f.click('s:no'); await f.click('s:no'); await f.click('s:no'); await f.click('s:yes');
   const user = await f.store.getUser(1); assert.equal(user.first_name, 'علی'); assert.equal(user.phone, '09123456789'); assert.equal(user.profile.is_student, false); f.db.close();
 });
+test('free reservation auto-issues a ticket without requesting a receipt', async () => {
+  const f = setup(); f.env.VERIFICATION_CHAT = ''; f.env.PUBLIC_URL = 'https://robotics-society.fum-robotics-ssa.workers.dev';
+  await f.store.upsertUser({ id: 1, phone: '09123456789', first_name: 'علی' });
+  const event = await f.store.saveEvent({ name: 'رویداد رایگان', capacity: 1, is_paid: 1, price: 0 });
+  await f.click(`e:${event.id}`);
+  await f.send('1');
+  const order = (await f.store.listOrders())[0];
+  assert.equal(order.status, 'approved');
+  assert.equal(order.unit_price, 0);
+  assert.equal((await f.store.getState(1)).step, 'idle');
+  assert.equal((await f.db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE method IN ('sendPhoto','sendDocument')").first()).n, 0);
+  const messages = (await f.db.prepare("SELECT payload FROM outbox WHERE method='sendMessage'").all()).results.map(row => JSON.parse(row.payload));
+  const ticketLink = messages.flatMap(message => message.reply_markup?.inline_keyboard || []).flat().find(button => button.text === 'بلیت 1');
+  assert.match(ticketLink.url, /^https:\/\/robotics-society\.fum-robotics-ssa\.workers\.dev\/ticket\/[0-9a-f]{64}$/);
+  f.db.close();
+});
+
 test('paid reserve receipt owner approval and retried update preserve one order', async () => {
   const f = setup(); await f.store.upsertUser({ id: 1, phone: '09123456789', first_name: 'علی' });
   const place = await f.store.savePlace({ name: 'سالن', capacity: 2, map_url: 'https://nshn.ir/example' });

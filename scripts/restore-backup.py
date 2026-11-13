@@ -37,7 +37,7 @@ OLD_TICKET_FIELDS = set(BASE_FIELDS["tickets"].split()) - {"checkin_code"}
 
 def new_checkin_code(used):
     while True:
-        code = f"{secrets.randbelow(100_000_000):08d}"
+        code = str(10_000_000 + secrets.randbelow(90_000_000))
         if code not in used:
             return code
 
@@ -52,6 +52,13 @@ def validate_snapshot(snapshot, include_admins=False):
         raise ValueError("Snapshot must contain exactly a supported set of backup tables")
     sql = legacy.empty_guard()
     checkin_codes = set()
+    reserved_checkin_codes = {
+        str(row.get("checkin_code")) for row in tables.get("tickets", [])
+        if isinstance(row, dict)
+        and set(row) == set(BASE_FIELDS["tickets"].split())
+        and re.fullmatch(r"\d{8}", str(row.get("checkin_code", "")))
+        and not str(row["checkin_code"]).startswith("0")
+    }
     for table, columns in FIELDS.items():
         rows = tables.get(table, [])
         if not isinstance(rows, list):
@@ -60,7 +67,11 @@ def validate_snapshot(snapshot, include_admins=False):
             if table == "places" and isinstance(row, dict) and "map_url" not in row:
                 row = {**row, "map_url": ""}  # Accept backups made before the map-link migration.
             if table == "tickets" and isinstance(row, dict) and set(row) == OLD_TICKET_FIELDS:
-                row = {**row, "checkin_code": new_checkin_code(checkin_codes)}
+                row = {**row, "checkin_code": new_checkin_code(reserved_checkin_codes | checkin_codes)}
+            elif table == "tickets" and isinstance(row, dict) and set(row) == set(BASE_FIELDS["tickets"].split()):
+                old_code = str(row.get("checkin_code", ""))
+                if re.fullmatch(r"\d{8}", old_code) and old_code.startswith("0"):
+                    row = {**row, "checkin_code": new_checkin_code(reserved_checkin_codes | checkin_codes)}
             if not isinstance(row, dict) or set(row) != set(columns.split()):
                 raise ValueError("Missing or unknown columns in table " + table)
             if table == "tickets":
@@ -86,6 +97,7 @@ def validate_snapshot(snapshot, include_admins=False):
         check.executescript((ROOT / "migrations" / "0002_place_map_url.sql").read_text(encoding="utf8"))
         check.executescript((ROOT / "migrations" / "0003_legacy_event_audience.sql").read_text(encoding="utf8"))
         check.executescript((ROOT / "migrations" / "0004_ticket_checkin_code.sql").read_text(encoding="utf8"))
+        check.executescript((ROOT / "migrations" / "0005_randomize_ticket_checkin_codes.sql").read_text(encoding="utf8"))
         check.executescript(text)
         if check.execute("PRAGMA foreign_key_check").fetchone():
             raise ValueError("Snapshot contains broken foreign keys")

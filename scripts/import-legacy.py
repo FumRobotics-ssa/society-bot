@@ -178,9 +178,9 @@ def make_migration(data, keep_active=False):
             "expires_at": now - 1 if is_reserved else None, "receipt_file_id": None,
             "receipt_type": None, "receipt_key": None, "reviewed_by": None,
             "reviewed_at": None, "created_at": purchased, "updated_at": now})
-        checkin_code = f"{secrets.randbelow(100_000_000):08d}"
+        checkin_code = str(10_000_000 + secrets.randbelow(90_000_000))
         while checkin_code in checkin_codes:
-            checkin_code = f"{secrets.randbelow(100_000_000):08d}"
+            checkin_code = str(10_000_000 + secrets.randbelow(90_000_000))
         checkin_codes.add(checkin_code)
         rows["tickets"].append({"id": str(uuid.uuid4()), "token": secrets.token_hex(32),
             "checkin_code": checkin_code,
@@ -205,6 +205,7 @@ def make_migration(data, keep_active=False):
         check.executescript((MIGRATIONS / "0002_place_map_url.sql").read_text(encoding="utf8"))
         check.executescript((MIGRATIONS / "0003_legacy_event_audience.sql").read_text(encoding="utf8"))
         check.executescript((MIGRATIONS / "0004_ticket_checkin_code.sql").read_text(encoding="utf8"))
+        check.executescript((MIGRATIONS / "0005_randomize_ticket_checkin_codes.sql").read_text(encoding="utf8"))
         check.executescript(text)
         if check.execute("PRAGMA foreign_key_check").fetchone():
             raise ValueError("Migration contains broken foreign keys")

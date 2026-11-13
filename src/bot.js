@@ -129,7 +129,7 @@ export async function handleUpdate(update, env, store) {
     if (!await needAccount()) return;
     const event = await store.getEvent(positive(eventId));
     if (!event || !event.active || event.archived) return send('این رویداد موجود نیست یا ثبت‌نام آن متوقف شده است');
-    if (event.is_paid && !env.VERIFICATION_CHAT) return send('ثبت نام رویدادهای پولی تا تنظیم گروه بررسی پرداخت متوقف است');
+    if (event.is_paid && Number(event.price) > 0 && !env.VERIFICATION_CHAT) return send('ثبت نام رویدادهای پولی تا تنظیم گروه بررسی پرداخت متوقف است');
     await send(eventText(event) + '\n\nتعداد بلیت مورد نظر را وارد کنید\nبرای توقف /cancel را بفرستید');
     await store.setState(from.id, 'reserve_quantity', { event_id: event.id, last_update_id: update.update_id });
   };

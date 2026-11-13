@@ -31,6 +31,23 @@ test('legacy conversion keeps approved ticket and profile without changing sourc
   assert.equal(target.native.prepare('SELECT COUNT(*) AS n FROM admins').get().n, 0);
   assert.equal(target.native.prepare('SELECT active FROM events').get().active, 0); target.close(); rmSync(dir, { recursive: true });
 });
+test('random-code migration replaces sequential values while preserving ticket links', () => {
+  const priorSchema = readdirSync(new URL('../migrations/', import.meta.url)).filter(name => name.endsWith('.sql') && name < '0005_randomize_ticket_checkin_codes.sql').sort().map(name => readFileSync(new URL('../migrations/' + name, import.meta.url), 'utf8')).join('\n');
+  const db = createDatabase(); db.exec(priorSchema);
+  db.exec(`INSERT INTO users(id,first_name) VALUES(1,'علی');
+    INSERT INTO events(name,capacity,max_per_user) VALUES('رویداد',2,2);
+    INSERT INTO orders(id,request_key,user_id,event_id,quantity,status) VALUES('order','key',1,1,2,'approved');
+    INSERT INTO tickets(id,token,checkin_code,order_id) VALUES('t1','${'a'.repeat(64)}','00000001','order'),('t2','${'b'.repeat(64)}','00000002','order');`);
+  const before = db.native.prepare('SELECT id,token FROM tickets ORDER BY id').all().map(({ id, token }) => ({ id, token }));
+  db.exec(readFileSync(new URL('../migrations/0005_randomize_ticket_checkin_codes.sql', import.meta.url), 'utf8'));
+  const after = db.native.prepare('SELECT id,token,checkin_code FROM tickets ORDER BY id').all();
+  assert.deepEqual(after.map(({ id, token }) => ({ id, token })), before);
+  assert.ok(after.every(ticket => /^[1-9][0-9]{7}$/.test(ticket.checkin_code)));
+  assert.equal(new Set(after.map(ticket => ticket.checkin_code)).size, 2);
+  assert.ok(after.every(ticket => !['00000001', '00000002'].includes(ticket.checkin_code)));
+  db.close();
+});
+
 test('JSON backup restore preserves ticket token and excludes sessions and admin rights by default', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'robotics-restore-')); const source = join(dir, 'backup.json'), output = join(dir, 'restore.sql');
   const db = createDatabase(); db.exec(schema); const store = new Store(db);
@@ -43,13 +60,18 @@ test('JSON backup restore preserves ticket token and excludes sessions and admin
   assert.equal(result.status, 0, result.stderr);
   const target = createDatabase(); target.exec(schema); target.exec(readFileSync(output, 'utf8'));
   assert.equal(target.native.prepare('SELECT token FROM tickets').get().token, order.tickets[0].token);
+  assert.match(target.native.prepare('SELECT checkin_code FROM tickets').get().checkin_code, /^[1-9][0-9]{7}$/);
   assert.equal(target.native.prepare('SELECT COUNT(*) AS n FROM admins').get().n, 0);
   const legacySource = join(dir, 'legacy.json'), legacyOutput = join(dir, 'legacy.sql');
-  writeFileSync(legacySource, snapshot.replace('robotics-society-json', 'siahe-json'));
+  const legacySnapshot = JSON.parse(snapshot);
+  legacySnapshot.format = 'siahe-json';
+  legacySnapshot.tables.tickets[0].checkin_code = '00000001';
+  writeFileSync(legacySource, JSON.stringify(legacySnapshot));
   const legacyResult = spawnSync('python', [fileURLToPath(new URL('../scripts/restore-backup.py', import.meta.url)), legacySource, legacyOutput], { encoding: 'utf8' });
   assert.equal(legacyResult.status, 0, legacyResult.stderr);
   const legacyTarget = createDatabase(); legacyTarget.exec(schema); legacyTarget.exec(readFileSync(legacyOutput, 'utf8'));
   assert.equal(legacyTarget.native.prepare('SELECT token FROM tickets').get().token, order.tickets[0].token);
+  assert.match(legacyTarget.native.prepare('SELECT checkin_code FROM tickets').get().checkin_code, /^[1-9][0-9]{7}$/);
   db.close(); target.close(); legacyTarget.close(); rmSync(dir, { recursive: true });
 });
 test('daily backup filename has only project name and date', async () => {

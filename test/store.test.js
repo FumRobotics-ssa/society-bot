@@ -28,6 +28,15 @@ test('competing reservations never oversell and tickets and orders commit togeth
   assert.equal(db.native.prepare('SELECT COUNT(*) AS n FROM tickets').get().n, 2);
 });
 
+test('check-in codes are random eight-digit numbers without a leading zero', async t => {
+  const { store, event } = await fixture(t, { capacity: 100, max: 100 });
+  const { tickets } = await store.reserve(1, event.id, 100, 'random-codes');
+  const codes = tickets.map(ticket => ticket.checkin_code);
+  assert.equal(codes.length, 100);
+  assert.ok(codes.every(code => /^[1-9][0-9]{7}$/.test(code)));
+  assert.equal(new Set(codes).size, codes.length);
+});
+
 test('same update can be retried and a key cannot be reused by another user', async t => {
   const { store, event } = await fixture(t, { capacity: 2, max: 2 });
   const [a, b] = await Promise.all([

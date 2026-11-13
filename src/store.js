@@ -17,9 +17,10 @@ const normalizeDigits = (value) => String(value).replace(/[۰-۹٠-٩]/g, digit 
 });
 function randomCheckinCode() {
   const value = new Uint32Array(1);
-  const limit = Math.floor(0x100000000 / 100000000) * 100000000;
+  const range = 90_000_000;
+  const limit = Math.floor(0x100000000 / range) * range;
   do { crypto.getRandomValues(value); } while (value[0] >= limit);
-  return String(value[0] % 100000000).padStart(8, '0');
+  return String(10_000_000 + (value[0] % range));
 }
 function ticketBatch(quantity) {
   const used = new Set();
