@@ -1,13 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { createDatabase } from '../src/sqlite.js';
 import { Store } from '../src/store.js';
 import { handleUpdate } from '../src/bot.js';
 import { maintenance } from '../src/jobs.js';
 
+const schema = readdirSync(new URL('../migrations/', import.meta.url)).filter(name => name.endsWith('.sql')).sort().map(name => readFileSync(new URL('../migrations/' + name, import.meta.url), 'utf8')).join('\n');
+
 function setup() {
-  const db = createDatabase(); db.exec(readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8')); db.exec(readFileSync(new URL('../migrations/0002_place_map_url.sql', import.meta.url), 'utf8'));
+  const db = createDatabase(); db.exec(schema);
   const store = new Store(db), env = { PUBLIC_URL: 'https://example.test', OWNER_IDS: '99', VERIFICATION_CHAT: '-100123' };
   let seq = 0;
   const message = (text, extra = {}) => ({ update_id: ++seq, message: { from: { id: 1 }, chat: { id: 1, type: 'private' }, text, ...extra } });
@@ -55,10 +57,10 @@ test('receipt review shows student status and previously approved tickets for th
   const sent = (await f.db.prepare("SELECT payload FROM outbox WHERE method='sendPhoto'").all()).results;
   assert.equal(sent.length, 1);
   const caption = JSON.parse(sent[0].payload).caption;
-  assert.match(caption, /دانشجوی فردوسی بله/);
-  assert.match(caption, /تعداد بلیت درخواستی 1/);
-  assert.match(caption, /تعداد بلیت‌های قبلا خریداری شده 1/);
-  assert.match(caption, /نام رویداد نمایش/);
+  assert.match(caption, /دانشجوی فردوسی: بله/);
+  assert.match(caption, /تعداد بلیت درخواستی: 1/);
+  assert.match(caption, /تعداد بلیت‌های قبلا خریداری شده: 1/);
+  assert.match(caption, /نام رویداد: نمایش/);
   f.db.close();
 });
 

@@ -14,7 +14,12 @@ for (const field of ['BOT_TOKEN', 'OWNER_IDS', 'PUBLIC_URL', 'WEBHOOK_SECRET']) 
 if (process.env.WEBHOOK_SECRET.length < 32) throw new Error('WEBHOOK_SECRET must have at least 32 random characters');
 const base = new URL(process.env.PUBLIC_URL);
 if (base.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(base.hostname)) throw new Error('PUBLIC_URL must use HTTPS in production');
-const db = createDatabase(process.env.DB_PATH || resolve(root, 'data/siahe.sqlite'));
+const databasePath = resolve(process.env.DB_PATH || resolve(root, 'data/robotics-society.sqlite'));
+const databaseDirectory = dirname(databasePath);
+if (!existsSync(databasePath) && existsSync(databaseDirectory) && readdirSync(databaseDirectory).some(name => /\.sqlite(?:3)?$/i.test(name))) {
+  throw new Error('An existing SQLite database was found. Set DB_PATH to that file before starting; no new database was created.');
+}
+const db = createDatabase(databasePath);
 db.exec('CREATE TABLE IF NOT EXISTS schema_migrations(name TEXT PRIMARY KEY)');
 for (const filename of readdirSync(resolve(root, 'migrations')).filter(x => x.endsWith('.sql')).sort()) {
   if (!await db.prepare('SELECT name FROM schema_migrations WHERE name=?').bind(filename).first()) {

@@ -14,7 +14,7 @@ import sqlite3
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("siahe_legacy_import", Path(__file__).with_name("import-legacy.py"))
+spec = importlib.util.spec_from_file_location("robotics_society_legacy_import", Path(__file__).with_name("import-legacy.py"))
 legacy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(legacy)
 

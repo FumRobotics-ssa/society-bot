@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read an original siahe SQLite snapshot and emit SQL for an EMPTY new database.
+"""Read an original legacy SQLite snapshot and emit SQL for an EMPTY new database.
 
 This script never opens the original database for writing and never executes
 anything against a deployed database. Review the report before importing SQL.

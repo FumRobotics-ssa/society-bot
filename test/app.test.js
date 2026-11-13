@@ -1,20 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { createDatabase } from '../src/sqlite.js';
 import { Store } from '../src/store.js';
 import { handleRequest } from '../src/app.js';
-import { createLoginCode, exchangeLogin, digest } from '../src/auth.js';
+import { createLoginCode, exchangeLogin, digest, SESSION_COOKIE } from '../src/auth.js';
 import { receiveUpdate, processOutbox, processInbox } from '../src/jobs.js';
 
+const schema = readdirSync(new URL('../migrations/', import.meta.url)).filter(name => name.endsWith('.sql')).sort().map(name => readFileSync(new URL('../migrations/' + name, import.meta.url), 'utf8')).join('\n');
+
 function fixture() {
-  const db = createDatabase(); db.exec(readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8')); db.exec(readFileSync(new URL('../migrations/0002_place_map_url.sql', import.meta.url), 'utf8'));
+  const db = createDatabase(); db.exec(schema);
   const env = { DB: db, OWNER_IDS: '99', PUBLIC_URL: 'https://example.test', WEBHOOK_SECRET: 'a'.repeat(40), BOT_TOKEN: 'fake', ASSETS: { fetch: async () => new Response('asset') } };
   const store = new Store(db);
   const request = (path, init = {}) => handleRequest(new Request(env.PUBLIC_URL + path, init), env, { waitUntil() {} });
   return { db, env, store, request };
 }
-async function cookie(db, userId) { const session = await exchangeLogin(db, await createLoginCode(db, userId)); return 'siahe_session=' + session.token; }
+async function cookie(db, userId) { const session = await exchangeLogin(db, await createLoginCode(db, userId)); return SESSION_COOKIE + '=' + session.token; }
 test('one time login consumed once and secret only stored hashed', async () => {
   const { db } = fixture(); const code = await createLoginCode(db, 99);
   const stored = await db.prepare('SELECT token_hash FROM login_codes').first(); assert.equal(stored.token_hash, await digest(code));
@@ -77,4 +79,16 @@ test('sender ordering blocks later updates during retry backoff but permits othe
   await processInbox(env, 1);
   assert.equal((await db.prepare('SELECT status FROM inbox WHERE update_id=2').first()).status, 'new');
   assert.equal((await db.prepare('SELECT status FROM inbox WHERE update_id=3').first()).status, 'done'); db.close();
+});
+
+test('login issues the Robotics Society session cookie and it authenticates requests', async () => {
+  const { db, env, request } = fixture();
+  const code = await createLoginCode(db, 99);
+  const response = await request('/api/session', { method: 'POST', headers: { Origin: env.PUBLIC_URL, 'Content-Type': 'application/json' }, body: JSON.stringify({ token: code }) });
+  assert.equal(response.status, 200);
+  const cookie = response.headers.get('Set-Cookie');
+  assert.match(cookie, /^robotics_society_session=[a-f0-9]{64};/);
+  assert.match(cookie, /HttpOnly; SameSite=Strict/);
+  assert.equal((await request('/api/me', { headers: { Cookie: cookie.split(';')[0] } })).status, 200);
+  db.close();
 });

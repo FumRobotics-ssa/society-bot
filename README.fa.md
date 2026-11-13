@@ -2,8 +2,7 @@
 
 ربات ثبت نام و فروش بلیت رویدادها با JavaScript و Telegram HTTP Bot API
 
-نسخه اصلی پروژه DearRude/siahe است و مجوز AGPL نسخه ۳ یا بالاتر حفظ شده است
-https://github.com/DearRude/siahe
+اطلاعات سازندگان و منبع اولیه در NOTICE آمده است و مجوز AGPL نسخه ۳ یا بالاتر حفظ شده است
 
 ## امکانات
 
@@ -42,7 +41,7 @@ Node.js نسخه ۲۲٫۱۳ یا بالاتر نصب کنید
 ```sh
 npm ci
 npx wrangler login
-npx wrangler d1 create siahe
+npx wrangler d1 create robotics-society
 ```
 
 شناسه دیتابیس برگشتی را در database_id فایل wrangler.toml بگذارید
@@ -154,7 +153,7 @@ python scripts/import-legacy.py old.sqlite legacy-import.sql
 فقط در یک دیتابیس جدید خالی که migration روی آن اجرا شده وارد کنید
 
 ```sh
-npx wrangler d1 execute siahe --remote --file legacy-import.sql
+npx wrangler d1 execute DB --remote --file legacy-import.sql
 ```
 
 رویدادهای واردشده پیشفرض غیرفعالند تا مبلغ و اطلاعات پرداخت بازبینی شوند
@@ -191,3 +190,9 @@ npx wrangler deploy --dry-run
 
 قبل از فروش واقعی روی حساب آزمایشی ثبت نام و رزرو همزمان و رسید و تایید و رد و انقضا و QR و بازیابی بکاپ را بررسی کنید
 خروجی CPU و محدودیت دیتابیس پلن انتخابی باید با بار واقعی اندازه گیری شود
+
+## تغییر نام پروژه و Cloudflare
+
+نام فارسی سامانه «انجمن رباتیک» و نام انگلیسی آن Robotics Society است.
+نام Worker برابر robotics-society است؛ دستورهای D1 از اتصال DB و شناسهٔ دیتابیس موجود استفاده می‌کنند.
+مراحل انتقال استقرار موجود در [راهنمای تغییر نام](docs/REBRANDING.fa.md) آمده است.

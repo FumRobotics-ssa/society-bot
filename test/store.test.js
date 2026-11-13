@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { Store } from '../src/store.js';
 import { createDatabase } from '../src/sqlite.js';
 
-const schema = readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8') + '\n' + readFileSync(new URL('../migrations/0002_place_map_url.sql', import.meta.url), 'utf8');
+const schema = readdirSync(new URL('../migrations/', import.meta.url)).filter(name => name.endsWith('.sql')).sort().map(name => readFileSync(new URL('../migrations/' + name, import.meta.url), 'utf8')).join('\n');
 async function fixture(t, { capacity = 3, max = 2, paid = false } = {}) {
   const db = createDatabase();
   db.exec(schema);

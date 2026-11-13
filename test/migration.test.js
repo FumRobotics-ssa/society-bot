@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -9,7 +9,7 @@ import { createDatabase } from '../src/sqlite.js';
 import { Store } from '../src/store.js';
 import { exportBackup, runBackup } from '../src/backup.js';
 
-const schema = readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8') + '\n' + readFileSync(new URL('../migrations/0002_place_map_url.sql', import.meta.url), 'utf8');
+const schema = readdirSync(new URL('../migrations/', import.meta.url)).filter(name => name.endsWith('.sql')).sort().map(name => readFileSync(new URL('../migrations/' + name, import.meta.url), 'utf8')).join('\n');
 test('legacy conversion keeps approved ticket and profile without changing source or trusting old roles', () => {
   const dir = mkdtempSync(join(tmpdir(), 'robotics-migration-'));
   const source = join(dir, 'old.sqlite'), output = join(dir, 'new.sql');

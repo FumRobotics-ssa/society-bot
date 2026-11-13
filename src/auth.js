@@ -1,3 +1,4 @@
+export const SESSION_COOKIE = 'robotics_society_session';
 const encoder = new TextEncoder();
 const hex = bytes => [...new Uint8Array(bytes)].map(b => b.toString(16).padStart(2, '0')).join('');
 export const now = () => Math.floor(Date.now() / 1000);
@@ -27,7 +28,7 @@ export async function exchangeLogin(db, token) {
   return { token: session, user_id: row.user_id };
 }
 export function cookieToken(request) {
-  return request.headers.get('Cookie')?.split(';').map(s => s.trim()).find(s => s.startsWith('siahe_session='))?.slice(14) || '';
+  return request.headers.get('Cookie')?.split(';').map(s => s.trim()).find(s => s.startsWith(`${SESSION_COOKIE}=`))?.slice(SESSION_COOKIE.length + 1) || '';
 }
 export async function getSession(request, env, store) {
   const token = cookieToken(request);
@@ -40,7 +41,7 @@ export async function getSession(request, env, store) {
 export function sessionCookie(request, token, maxAge = 28800) {
   const url = new URL(request.url);
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
-  return `siahe_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${local && url.protocol === 'http:' ? '' : '; Secure'}`;
+  return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${local && url.protocol === 'http:' ? '' : '; Secure'}`;
 }
 export function validOrigin(request, env) {
   const origin = request.headers.get('Origin');

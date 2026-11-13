@@ -10,8 +10,8 @@
     "test": "node --test",
     "dev:cloud": "wrangler dev",
     "deploy": "wrangler deploy",
-    "db:local": "wrangler d1 migrations apply siahe --local",
-    "db:remote": "wrangler d1 migrations apply siahe --remote",
+    "db:local": "wrangler d1 migrations apply DB --local",
+    "db:remote": "wrangler d1 migrations apply DB --remote",
     "webhook": "node --env-file-if-exists=.env scripts/webhook.js"
   },
   "dependencies": { "qrcode-generator": "1.4.4" },

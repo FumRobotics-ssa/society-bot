@@ -8,6 +8,6 @@ COPY migrations ./migrations
 COPY scripts ./scripts
 RUN mkdir -p /app/data && chown -R node:node /app
 USER node
-ENV HOST=0.0.0.0 PORT=8787 DB_PATH=/app/data/siahe.sqlite
+ENV HOST=0.0.0.0 PORT=8787 DB_PATH=/app/data/robotics-society.sqlite
 EXPOSE 8787
 CMD ["node", "src/server.js"]

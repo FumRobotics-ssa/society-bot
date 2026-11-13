@@ -1,13 +1,14 @@
+name: robotics-society
 services:
-  siahe:
+  robotics-society:
     build: .
     restart: unless-stopped
     env_file: .env
     environment:
       HOST: 0.0.0.0
-      DB_PATH: /app/data/siahe.sqlite
+      DB_PATH: ${ROBOTICS_DB_PATH:-/app/data/robotics-society.sqlite}
     volumes:
-      - siahe_data:/app/data
+      - robotics_data:/app/data
     ports:
       - 127.0.0.1:8787:8787
     security_opt:
@@ -15,4 +16,5 @@ services:
     cap_drop:
       - ALL
 volumes:
-  siahe_data:
+  robotics_data:
+    name: ${ROBOTICS_DATA_VOLUME:-robotics-society-data}
