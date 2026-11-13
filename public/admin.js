@@ -1,4 +1,4 @@
-import { formatJalaliDate, jalaliFirstWeekday, jalaliMonthLength, jalaliMonths, jalaliTimeToIso, parseJalaliDate, persianNumber, tehranDateTime } from './jalali.js';
+import { formatJalaliDate, jalaliFirstWeekday, jalaliMonthLength, jalaliMonths, jalaliTimeToIso, latinNumber, parseJalaliDate, persianNumber, tehranDateTime } from './jalali.js';
 
 /* Admin credentials live only in an HttpOnly server session; no persistent browser tokens. */
 const $ = (id) => document.getElementById(id);
@@ -41,6 +41,10 @@ function date(value) {
   if (!value) return 'زمان تعیین نشده';
   const d = new Date(typeof value === 'number' && value < 100000000000 ? value * 1000 : value);
   return Number.isNaN(d.getTime()) ? String(value) : new Intl.DateTimeFormat('fa-IR-u-ca-persian', { timeZone: 'Asia/Tehran', dateStyle: 'medium', timeStyle: 'short' }).format(d);
+}
+function ticketCode(value) {
+  const code = String(value || '');
+  return /^\d{8}$/.test(code) ? code : '';
 }
 const calendar = { year: 0, month: 0, day: 1 };
 function selectedJalaliDate() {
@@ -108,6 +112,26 @@ function openJalaliCalendar() {
   renderJalaliCalendar();
   $('jalali-dialog').showModal();
   $('jalali-days').querySelector(`[data-day="${selected.day}"]`)?.focus();
+}
+function openTimePicker() {
+  const parsed = /^(\d{2}):(\d{2})$/.exec(latinNumber($('event-start-time').value || '').trim());
+  const current = tehranDateTime();
+  const selectedHour = parsed ? Number(parsed[1]) : current.hour;
+  const selectedMinute = parsed ? Number(parsed[2]) : current.minute;
+  $('time-hour').replaceChildren(...Array.from({ length: 24 }, (_, hour) => {
+    const option = el('option', persianNumber(String(hour).padStart(2, '0'))); option.value = String(hour).padStart(2, '0'); return option;
+  }));
+  $('time-minute').replaceChildren(...Array.from({ length: 60 }, (_, minute) => {
+    const option = el('option', persianNumber(String(minute).padStart(2, '0'))); option.value = String(minute).padStart(2, '0'); return option;
+  }));
+  $('time-hour').value = String(selectedHour).padStart(2, '0');
+  $('time-minute').value = String(selectedMinute).padStart(2, '0');
+  $('time-dialog').showModal();
+}
+function chooseTime() {
+  $('event-start-time').value = persianNumber(`${$('time-hour').value}:${$('time-minute').value}`);
+  $('time-dialog').close();
+  $('event-start-time').focus();
 }
 async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
@@ -231,7 +255,7 @@ function eventCard(event, editable) {
   card.append(top, el('h3', event.name), el('p', event.description || 'توضیحی برای این رویداد ثبت نشده', 'description'));
   const meta = el('div', null, 'event-meta');
   const place = state.places.find((place) => String(place.id) === String(event.place_id));
-  [['زمان', date(event.starts_at)], ['مکان', place?.name || event.place_name || 'تعیین نشده'], ['ظرفیت', number(event.capacity) + ' نفر'], ['سقف هر نفر', number(event.max_per_user) + ' بلیت']].forEach(([label, value]) => { const cell = el('div', label); cell.append(el('strong', value)); meta.append(cell); });
+  [['زمان شروع', date(event.starts_at)], ['مکان', place?.name || event.place_name || 'تعیین نشده'], ['ظرفیت', number(event.capacity) + ' نفر'], ['سقف هر نفر', number(event.max_per_user) + ' بلیت']].forEach(([label, value]) => { const cell = el('div', label); cell.append(el('strong', value)); meta.append(cell); });
   card.append(meta);
   const actions = el('div', null, 'actions');
   if (editable) {
@@ -261,7 +285,7 @@ function editEvent(event = null) {
   form.elements.namedItem('is_paid').checked = yes(event?.is_paid);
   const when = event?.starts_at ? tehranDateTime(event.starts_at) : null;
   $('event-jalali-date').value = when ? formatJalaliDate(when) : '';
-  form.elements.namedItem('starts_at_time').value = when ? `${String(when.hour).padStart(2, '0')}:${String(when.minute).padStart(2, '0')}` : '';
+  form.elements.namedItem('starts_at_time').value = when ? persianNumber(`${String(when.hour).padStart(2, '0')}:${String(when.minute).padStart(2, '0')}`) : '';
   form.hidden = false; form.scrollIntoView({ behavior: 'smooth', block: 'start' }); form.elements.namedItem('name').focus();
 }
 function showPlaces() {
@@ -297,7 +321,7 @@ async function showTickets() {
     const token = ticket.token || ticket.checkin_token || ticket.qr_token;
     const actions = el('div', null, 'actions');
     if (token && !ticket.checked_in_at && !ticket.attended_at && ticket.status !== 'attended') actions.append(button('ثبت ورود', async () => { await navigate('checkin'); $('checkin-token').value = token; $('checkin-token').focus(); }));
-    return [ticket.code || ticket.id, person(ticket), eventName(ticket), badge(ticket.status || (ticket.checked_in_at ? 'attended' : 'issued')), ticket.checked_in_at || ticket.attended_at ? date(ticket.checked_in_at || ticket.attended_at) : 'هنوز وارد نشده', actions];
+    return [ticketCode(ticket.checkin_code) || ticket.id, person(ticket), eventName(ticket), badge(ticket.status || (ticket.checked_in_at ? 'attended' : 'issued')), ticket.checked_in_at || ticket.attended_at ? date(ticket.checked_in_at || ticket.attended_at) : 'هنوز وارد نشده', actions];
   }));
   pager($('tickets-list'), 'tickets', data.length);
 }
@@ -420,6 +444,12 @@ $('cancel-event').addEventListener('click', () => { $('event-form').hidden = tru
 $('jalali-open').addEventListener('click', openJalaliCalendar);
 $('event-jalali-date').addEventListener('click', openJalaliCalendar);
 $('event-jalali-date').addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openJalaliCalendar(); } });
+$('time-open').addEventListener('click', openTimePicker);
+$('event-start-time').addEventListener('click', openTimePicker);
+$('event-start-time').addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openTimePicker(); } });
+$('time-confirm').addEventListener('click', chooseTime);
+$('time-cancel').addEventListener('click', () => $('time-dialog').close());
+$('time-dialog').addEventListener('click', (event) => { if (event.target === $('time-dialog')) $('time-dialog').close(); });
 $('jalali-prev').addEventListener('click', () => shiftJalaliMonth(-1));
 $('jalali-next').addEventListener('click', () => shiftJalaliMonth(1));
 $('jalali-year').addEventListener('change', (event) => { calendar.year = Number(event.currentTarget.value); renderJalaliCalendar(); });

@@ -15,6 +15,21 @@ const normalizeDigits = (value) => String(value).replace(/[۰-۹٠-٩]/g, digit 
   const persian = '۰۱۲۳۴۵۶۷۸۹'.indexOf(digit);
   return String(persian >= 0 ? persian : '٠١٢٣٤٥٦٧٨٩'.indexOf(digit));
 });
+function randomCheckinCode() {
+  const value = new Uint32Array(1);
+  const limit = Math.floor(0x100000000 / 100000000) * 100000000;
+  do { crypto.getRandomValues(value); } while (value[0] >= limit);
+  return String(value[0] % 100000000).padStart(8, '0');
+}
+function ticketBatch(quantity) {
+  const used = new Set();
+  return Array.from({ length: quantity }, () => {
+    let checkin_code;
+    do { checkin_code = randomCheckinCode(); } while (used.has(checkin_code));
+    used.add(checkin_code);
+    return { id: crypto.randomUUID(), token: crypto.randomUUID().replaceAll('-', '') + crypto.randomUUID().replaceAll('-', ''), checkin_code };
+  });
+}
 function audienceKey(value) {
   const match = /^(current|legacy):([1-9]\d*)$/.exec(String(value || ''));
   if (!match || !Number.isSafeInteger(Number(match[2]))) return null;
@@ -229,24 +244,28 @@ export class Store {
     const existing = await this.one('SELECT id,user_id,event_id,quantity FROM orders WHERE request_key=?', key);
     if (existing) return this.existingReservation(existing, userId, eventId, quantity);
     const id = crypto.randomUUID();
-    const tickets = Array.from({ length: quantity }, () => ({ id: crypto.randomUUID(), token: crypto.randomUUID().replaceAll('-', '') + crypto.randomUUID().replaceAll('-', '') }));
-    try {
-      await this.db.batch([
-        this.stmt(`INSERT INTO orders(id,request_key,user_id,event_id,quantity,unit_price,status,expires_at)
-          SELECT ?,?,u.id,e.id,?,CASE WHEN e.is_paid=1 THEN e.price ELSE 0 END,
-          CASE WHEN e.is_paid=1 THEN 'reserved' ELSE 'approved' END,
-          CASE WHEN e.is_paid=1 THEN unixepoch()+900 ELSE NULL END
-          FROM events e,users u WHERE e.id=? AND u.id=? AND e.active=1 AND e.archived=0 AND u.is_deleted=0`,
-          id, key, quantity, eventId, userId),
-        this.stmt(`INSERT INTO tickets(id,token,order_id)
-          SELECT json_extract(value,'$.id'),json_extract(value,'$.token'),? FROM json_each(?)
-          WHERE EXISTS(SELECT 1 FROM orders WHERE id=?)`, id, JSON.stringify(tickets), id),
-      ]);
-    } catch (e) {
-      // A retry racing the original request returns the original booking even if capacity is now full.
-      const retry = await this.one('SELECT id,user_id,event_id,quantity FROM orders WHERE request_key=?', key);
-      if (retry) return this.existingReservation(retry, userId, eventId, quantity);
-      throw mapDbError(e);
+    let tickets;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      tickets = ticketBatch(quantity);
+      try {
+        await this.db.batch([
+          this.stmt(`INSERT INTO orders(id,request_key,user_id,event_id,quantity,unit_price,status,expires_at)
+            SELECT ?,?,u.id,e.id,?,CASE WHEN e.is_paid=1 AND e.price>0 THEN e.price ELSE 0 END,
+            CASE WHEN e.is_paid=1 AND e.price>0 THEN 'reserved' ELSE 'approved' END,
+            CASE WHEN e.is_paid=1 AND e.price>0 THEN unixepoch()+900 ELSE NULL END
+            FROM events e,users u WHERE e.id=? AND u.id=? AND e.active=1 AND e.archived=0 AND u.is_deleted=0`,
+            id, key, quantity, eventId, userId),
+          this.stmt(`INSERT INTO tickets(id,token,checkin_code,order_id)
+            SELECT json_extract(value,'$.id'),json_extract(value,'$.token'),json_extract(value,'$.checkin_code'),? FROM json_each(?)
+            WHERE EXISTS(SELECT 1 FROM orders WHERE id=?)`, id, JSON.stringify(tickets), id),
+        ]);
+        break;
+      } catch (e) {
+        // A retry racing the original request returns its booking; only short-code collisions are retried.
+        const retry = await this.one('SELECT id,user_id,event_id,quantity FROM orders WHERE request_key=?', key);
+        if (retry) return this.existingReservation(retry, userId, eventId, quantity);
+        if (!/tickets\.checkin_code/i.test(String(e)) || attempt === 4) throw mapDbError(e);
+      }
     }
     const order = await this.getOrder(id);
     if (!order) {
@@ -326,8 +345,16 @@ export class Store {
     return this.all(`${this.ticketSelect()} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY t.created_at DESC,t.rowid DESC LIMIT ? OFFSET ?`, ...values, ...paging(limit, offset));
   }
   async getTicket(tokenOrId) {
-    // legacy_code is only an administrator lookup convenience, never a bearer credential.
-    return this.one(`${this.ticketSelect()} WHERE t.token=? OR t.id=? OR t.legacy_code=? LIMIT 1`, String(tokenOrId), String(tokenOrId), String(tokenOrId));
+    // Full tokens remain the private ticket-link credential; numeric codes are for authenticated check-in.
+    const input = String(tokenOrId || '').trim();
+    const exact = await this.one(`${this.ticketSelect()} WHERE t.token=? OR t.id=? LIMIT 1`, input, input);
+    if (exact) return exact;
+    const code = normalizeDigits(input).replace(/\D/g, '');
+    if (/^\d{8}$/.test(code)) {
+      const coded = await this.one(`${this.ticketSelect()} WHERE t.checkin_code=? LIMIT 1`, code);
+      if (coded) return coded;
+    }
+    return this.one(`${this.ticketSelect()} WHERE t.legacy_code=? LIMIT 1`, input);
   }
   async checkIn(tokenOrId, actorId) {
     const ticket = await this.getTicket(tokenOrId);

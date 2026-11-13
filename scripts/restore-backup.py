@@ -9,6 +9,7 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+import secrets
 import sqlite3
 import sys
 
@@ -22,7 +23,7 @@ BASE_FIELDS = {
     "places": "id name address capacity created_at map_url",
     "events": "id name description place_id capacity max_per_user is_paid price payment_instructions starts_at active archived created_at updated_at",
     "orders": "id request_key user_id event_id quantity unit_price status expires_at receipt_file_id receipt_type receipt_key reviewed_by reviewed_at created_at updated_at",
-    "tickets": "id token legacy_code order_id checked_in_at checked_in_by created_at",
+    "tickets": "id token checkin_code legacy_code order_id checked_in_at checked_in_by created_at",
     "admins": "user_id role created_at",
     "audit_log": "id actor_id action target details_json created_at",
 }
@@ -31,6 +32,14 @@ LEGACY_AUDIENCE_FIELDS = {
     "legacy_event_participants": "legacy_event_id user_id ticket_count source_status",
 }
 FIELDS = {**BASE_FIELDS, **LEGACY_AUDIENCE_FIELDS}
+OLD_TICKET_FIELDS = set(BASE_FIELDS["tickets"].split()) - {"checkin_code"}
+
+
+def new_checkin_code(used):
+    while True:
+        code = f"{secrets.randbelow(100_000_000):08d}"
+        if code not in used:
+            return code
 
 
 def validate_snapshot(snapshot, include_admins=False):
@@ -42,6 +51,7 @@ def validate_snapshot(snapshot, include_admins=False):
     if not isinstance(tables, dict) or frozenset(tables) not in {frozenset(BASE_FIELDS), frozenset(FIELDS)}:
         raise ValueError("Snapshot must contain exactly a supported set of backup tables")
     sql = legacy.empty_guard()
+    checkin_codes = set()
     for table, columns in FIELDS.items():
         rows = tables.get(table, [])
         if not isinstance(rows, list):
@@ -49,10 +59,16 @@ def validate_snapshot(snapshot, include_admins=False):
         for row in rows:
             if table == "places" and isinstance(row, dict) and "map_url" not in row:
                 row = {**row, "map_url": ""}  # Accept backups made before the map-link migration.
+            if table == "tickets" and isinstance(row, dict) and set(row) == OLD_TICKET_FIELDS:
+                row = {**row, "checkin_code": new_checkin_code(checkin_codes)}
             if not isinstance(row, dict) or set(row) != set(columns.split()):
                 raise ValueError("Missing or unknown columns in table " + table)
-            if table == "tickets" and not re.fullmatch(r"[0-9a-f]{64}", str(row["token"])):
-                raise ValueError("Snapshot contains a malformed ticket bearer token")
+            if table == "tickets":
+                if not re.fullmatch(r"[0-9a-f]{64}", str(row["token"])):
+                    raise ValueError("Snapshot contains a malformed ticket bearer token")
+                if not re.fullmatch(r"\d{8}", str(row["checkin_code"])) or row["checkin_code"] in checkin_codes:
+                    raise ValueError("Snapshot contains an invalid or duplicate numeric check-in code")
+                checkin_codes.add(row["checkin_code"])
             if table == "admins" and row["role"] not in {"admin", "checkin"}:
                 raise ValueError("Snapshot contains an unsupported administrator role")
             if table == "users":
@@ -69,6 +85,7 @@ def validate_snapshot(snapshot, include_admins=False):
         check.executescript((ROOT / "migrations" / "0001_init.sql").read_text(encoding="utf8"))
         check.executescript((ROOT / "migrations" / "0002_place_map_url.sql").read_text(encoding="utf8"))
         check.executescript((ROOT / "migrations" / "0003_legacy_event_audience.sql").read_text(encoding="utf8"))
+        check.executescript((ROOT / "migrations" / "0004_ticket_checkin_code.sql").read_text(encoding="utf8"))
         check.executescript(text)
         if check.execute("PRAGMA foreign_key_check").fetchone():
             raise ValueError("Snapshot contains broken foreign keys")

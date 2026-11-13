@@ -19,3 +19,13 @@ body{background:#0f131a}
 
 .ticket-map{display:inline-block;color:#74a2f0;text-decoration:underline;text-underline-offset:4px}
 @media print{.ticket-map{color:#0f131a}}
+
+/* Match the dashboard's crossing-line grid and pointer glow on ticket pages. */
+body::before,body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;background-size:44px 44px}
+body::before{background-image:linear-gradient(to right,#74a2f01a 1px,transparent 1px),linear-gradient(to bottom,#74a2f01a 1px,transparent 1px);opacity:.36}
+body::after{background-image:linear-gradient(to right,#74a2f080 1px,transparent 1px),linear-gradient(to bottom,#74a2f080 1px,transparent 1px);-webkit-mask-image:radial-gradient(circle 280px at var(--pointer-x,50%) var(--pointer-y,45%),#000 3%,transparent 100%);mask-image:radial-gradient(circle 280px at var(--pointer-x,50%) var(--pointer-y,45%),#000 3%,transparent 100%);opacity:var(--grid-opacity,0);transition:opacity .35s ease}
+main{position:relative;z-index:1}
+.ticket-logo-wrap{display:block;width:76px;height:76px;margin:0 auto 10px}
+@media(max-width:700px){.ticket .association-logo{filter:none;mix-blend-mode:normal}}
+@media(prefers-reduced-motion:reduce){body::before,body::after{opacity:0}}
+@media print{body::before,body::after{display:none!important}}

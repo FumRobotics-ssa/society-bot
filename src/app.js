@@ -30,13 +30,17 @@ export function csv(rows) {
   return '\uFEFF' + [columns.map(quote).join(','), ...rows.map(row => columns.map(key => quote(row[key])).join(','))].join('\r\n');
 }
 function download(content, filename, type) { return new Response(content, { headers: { 'Content-Type': type, 'Content-Disposition': `attachment; filename="${filename}"` } }); }
+function shortTicketCode(value) {
+  const code = String(value || '');
+  return /^\d{8}$/.test(code) ? code : '';
+}
 function qrSvg(url) { const code = qr(0, 'M'); code.addData(url); code.make(); return code.createSvgTag({ cellSize: 4, margin: 16, scalable: true }); }
 function ticketHTML(ticket, env, print = false) {
   const mapUrl = neshanUrl(ticket.place_map_url);
   const valid = ticket.order_status === 'approved';
-  return `<article class="ticket"><img class="association-logo" src="/logo.png" alt="نشان انجمن رباتیک دانشگاه فردوسی مشهد" width="76" height="76"><p>انجمن علمی رباتیک دانشگاه فردوسی مشهد</p><h2>${esc(ticket.event_name)}</h2>${ticket.place_name ? `<p>مکان: ${esc(ticket.place_name)}</p>` : ''}${ticket.place_address ? `<p>نشانی: ${esc(ticket.place_address)}</p>` : ''}${mapUrl ? `<p><a class="ticket-map" href="${esc(mapUrl)}" target="_blank" rel="noopener noreferrer">موقعیت و مسیریابی در نشان</a></p>` : ''}<p>${valid ? ticket.checked_in_at ? 'ورود ثبت شده' : 'بلیت معتبر' : 'این بلیت معتبر نیست'}</p><img src="/ticket/${ticket.token}/qr.svg" alt="کد QR بلیت" width="240" height="240"><p dir="ltr">${esc(ticket.legacy_code || ticket.id)}</p>${print ? `<p>${esc(ticket.first_name)} ${esc(ticket.last_name)}</p>` : ''}<p>برای ثبت ورود کد را به مسئول پذیرش نشان دهید</p></article>`;
+  return `<article class="ticket"><picture class="ticket-logo-wrap"><source media="print" srcset="/logo.png"><source media="(max-width: 700px)" srcset="/logo-white.svg"><img class="association-logo" src="/logo.png" alt="نشان انجمن رباتیک دانشگاه فردوسی مشهد" width="76" height="76"></picture><p>انجمن علمی رباتیک دانشگاه فردوسی مشهد</p><h2>${esc(ticket.event_name)}</h2>${ticket.place_name ? `<p>مکان: ${esc(ticket.place_name)}</p>` : ''}${ticket.place_address ? `<p>نشانی: ${esc(ticket.place_address)}</p>` : ''}${mapUrl ? `<p><a class="ticket-map" href="${esc(mapUrl)}" target="_blank" rel="noopener noreferrer">موقعیت و مسیریابی در نشان</a></p>` : ''}<p>${valid ? ticket.checked_in_at ? 'ورود ثبت شده' : 'بلیت معتبر' : 'این بلیت معتبر نیست'}</p><img src="/ticket/${ticket.token}/qr.svg" alt="کد QR بلیت" width="240" height="240"><p>کد پذیرش</p><p dir="ltr">${esc(shortTicketCode(ticket.checkin_code))}</p>${print ? `<p>${esc(ticket.first_name)} ${esc(ticket.last_name)}</p>` : ''}<p>برای ثبت ورود کد را به مسئول پذیرش نشان دهید</p></article>`;
 }
-function page(content, title = 'بلیت انجمن رباتیک') { return `<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><link rel="stylesheet" href="/ticket.css"><body><main>${content}</main></body></html>`; }
+function page(content, title = 'بلیت انجمن رباتیک') { return `<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><link rel="stylesheet" href="/ticket.css"><body><main>${content}</main><script src="/grid.js" defer></script></body></html>`; }
 function pagination(url) { return { limit: Math.min(200, Math.max(1, Number(url.searchParams.get('limit')) || 100)), offset: Math.max(0, Number(url.searchParams.get('offset')) || 0) }; }
 async function allPages(loader) {
   const rows = [];
@@ -82,7 +86,7 @@ async function api(request, env, store, url) {
     let { token } = await body(request); token = String(token || '').trim();
     if (token.includes('/ticket/')) token = token.split('/ticket/').at(-1).split(/[?#]/)[0];
     const ticket = await store.checkIn(token, session.user_id);
-    return json({ id: ticket.id, event_name: ticket.event_name, first_name: ticket.first_name, last_name: ticket.last_name, checked_in_at: ticket.checked_in_at, already_checked_in: ticket.already_checked_in });
+    return json({ id: ticket.id, code: shortTicketCode(ticket.checkin_code), event_name: ticket.event_name, first_name: ticket.first_name, last_name: ticket.last_name, checked_in_at: ticket.checked_in_at, already_checked_in: ticket.already_checked_in });
   }
   if (session.role === 'checkin') fail('دسترسی شما فقط برای ثبت ورود است', 403);
   if (path === '/api/stats' && method === 'GET') {
@@ -117,7 +121,11 @@ async function api(request, env, store, url) {
   if (path === '/api/tickets' && method === 'GET') return json(await store.listTickets({ ...pagination(url), eventId: url.searchParams.get('eventId') || undefined }));
   if (path === '/api/users' && method === 'GET') return json(await store.listUsers({ ...pagination(url), search: url.searchParams.get('search') || '', audienceKey: url.searchParams.get('audienceKey') || '' }));
   if (path === '/api/export/users' && method === 'GET') return download(csv(await allPages(opts => store.listUsers(opts))), 'users.csv', 'text/csv;charset=utf-8');
-  if (path === '/api/export/tickets' && method === 'GET') return download(csv(await allPages(opts => store.listTickets({ ...opts, eventId: url.searchParams.get('eventId') || undefined }))), 'tickets.csv', 'text/csv;charset=utf-8');
+  if (path === '/api/export/tickets' && method === 'GET') {
+    const tickets = await allPages(opts => store.listTickets({ ...opts, eventId: url.searchParams.get('eventId') || undefined }));
+    const rows = tickets.map(({ id, token, ...ticket }) => ({ checkin_code: shortTicketCode(ticket.checkin_code), ...ticket }));
+    return download(csv(rows), 'tickets.csv', 'text/csv;charset=utf-8');
+  }
   if (path === '/api/print' && method === 'GET') {
     const eventId = url.searchParams.get('eventId'); if (!eventId) fail('رویداد را انتخاب کنید');
     const offset = pagination(url).offset, limit = Math.min(100, pagination(url).limit);
@@ -172,7 +180,7 @@ async function route(request, env, ctx) {
     return html(page(ticketHTML(row, env)));
   }
   if (url.pathname === '/') return Response.redirect(new URL('/admin', request.url), 302);
-  const assets = ['/admin', '/admin.html', '/admin.js', '/jalali.js', '/grid.js', '/style.css', '/ticket.css', '/logo.png'];
+  const assets = ['/admin', '/admin.html', '/admin.js', '/jalali.js', '/grid.js', '/style.css', '/ticket.css', '/logo.png', '/logo-white.svg'];
   if (!assets.includes(url.pathname) && !/^\/fonts\/(?:Meem-[A-Za-z]+\.ttf|fontawesome-webfont\.woff2)$/.test(url.pathname)) fail('مسیر پیدا نشد', 404);
   const asset = new URL(request.url); if (url.pathname === '/admin') asset.pathname = '/admin.html';
   return env.ASSETS.fetch(new Request(asset, request));

@@ -11,6 +11,10 @@ const MENU = { keyboard: [[{ text: 'رویدادها' }, { text: 'بلیت‌ه�
 function digits(value = '') {
   return String(value).replace(/[۰-۹٠-٩]/g, c => String(Math.max(FA_DIGITS.indexOf(c), AR_DIGITS.indexOf(c))));
 }
+function shortTicketCode(value) {
+  const code = String(value || '');
+  return /^\d{8}$/.test(code) ? code : '';
+}
 function ownerIds(env) {
   return String(env.OWNER_IDS || '').split(',').map(x => x.trim()).filter(Boolean);
 }
@@ -59,7 +63,7 @@ function eventTime(value) {
   return new Intl.DateTimeFormat('fa-IR', { timeZone: 'Asia/Tehran', calendar: 'persian', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(date);
 }
 function eventText(event) {
-  return [event.name, event.description || '', `شناسه: ${event.id}`, `مکان: ${event.place_name || 'بدون مکان مشخص'}`, event.address || event.place_address ? `نشانی: ${event.address || event.place_address}` : '', neshanUrl(event.place_map_url) ? `موقعیت در نشان: ${neshanUrl(event.place_map_url)}` : '', `زمان: ${eventTime(event.starts_at)}`, `ظرفیت: ${event.capacity}`, event.remaining != null ? `ظرفیت باقی‌مانده: ${event.remaining}` : '', `سقف بلیت برای هر نفر: ${event.max_per_user}`, event.is_paid ? `قیمت هر بلیت: ${money(event.price)} تومان` : 'قیمت: رایگان', `وضعیت: ${event.active ? 'فعال' : 'غیرفعال'}`].filter(Boolean).join('\n');
+  return [event.name, event.description || '', `شناسه: ${event.id}`, `مکان: ${event.place_name || 'بدون مکان مشخص'}`, event.address || event.place_address ? `نشانی: ${event.address || event.place_address}` : '', neshanUrl(event.place_map_url) ? `موقعیت در نشان: ${neshanUrl(event.place_map_url)}` : '', `زمان شروع: ${eventTime(event.starts_at)}`, `ظرفیت: ${event.capacity}`, event.remaining != null ? `ظرفیت باقی‌مانده: ${event.remaining}` : '', `سقف بلیت برای هر نفر: ${event.max_per_user}`, event.is_paid ? `قیمت هر بلیت: ${money(event.price)} تومان` : 'قیمت: رایگان', `وضعیت: ${event.active ? 'فعال' : 'غیرفعال'}`].filter(Boolean).join('\n');
 }
 function orderText(order) {
   return `${order.event_name || 'رویداد'}\nشناسه سفارش: ${order.id}\nتعداد بلیت: ${order.quantity}\nوضعیت: ${STATUS[order.status] || order.status}`;
@@ -237,16 +241,16 @@ export async function handleUpdate(update, env, store) {
           const previousTickets = await store.countApprovedTickets(from.id, order.event_id);
           const placeMapUrl = neshanUrl(order.place_map_url);
           const receiptCaption = [
-            `کد سفارش ${order.id}`,
-            `شناسه کاربر ${order.user_id}`,
-            `نام و نام خانوادگی ${[order.first_name, order.last_name].filter(Boolean).join(' ') || 'ثبت نشده'}`,
-            `دانشجوی فردوسی ${isFumStudent == null ? 'نامشخص' : isFumStudent ? 'بله' : 'خیر'}`,
-            `نام رویداد ${order.event_name || 'نامشخص'}`,
+            `کد سفارش: ${order.id}`,
+            `شناسه کاربر: ${order.user_id}`,
+            `نام و نام خانوادگی: ${[order.first_name, order.last_name].filter(Boolean).join(' ') || 'ثبت نشده'}`,
+            `دانشجوی فردوسی: ${isFumStudent == null ? 'نامشخص' : isFumStudent ? 'بله' : 'خیر'}`,
+            `نام رویداد: ${order.event_name || 'نامشخص'}`,
             order.place_name ? `مکان: ${String(order.place_name).slice(0, 120)}` : '',
             order.place_address ? `نشانی: ${String(order.place_address).slice(0, 160)}` : '',
-            `تعداد بلیت درخواستی ${order.quantity}`,
-            `تعداد بلیت‌های قبلا خریداری شده ${previousTickets}`,
-            `مبلغ کل ${money(Number(order.unit_price) * Number(order.quantity))} تومان`,
+            `تعداد بلیت درخواستی: ${order.quantity}`,
+            `تعداد بلیت‌های قبلا خریداری شده: ${previousTickets}`,
+            `مبلغ کل: ${money(Number(order.unit_price) * Number(order.quantity))} تومان`,
           ].join('\n');
           await store.enqueue(photo ? 'sendPhoto' : 'sendDocument', { chat_id: env.VERIFICATION_CHAT, [photo ? 'photo' : 'document']: order.receipt_file_id, caption: receiptCaption.slice(0, 1000), reply_markup: { inline_keyboard: [[{ text: 'تأیید پرداخت', callback_data: `r:${order.id}:y` }, { text: 'رد درخواست', callback_data: `r:${order.id}:n` }], ...(placeMapUrl ? [[{ text: 'موقعیت در نشان', url: placeMapUrl }]] : [])] } }, `receipt:${order.id}:${order.receipt_file_id}`);
           await send('رسید شما برای بررسی فرستاده شد\nنتیجه از همین ربات به شما اطلاع داده می‌شود', MENU);
@@ -298,7 +302,7 @@ export async function handleUpdate(update, env, store) {
     if (command === 'get_ticket') {
       const ticket = await store.getTicket(arg);
       if (!ticket) return send('بلیت پیدا نشد');
-      return send(`شناسه ${ticket.id}\nرویداد ${ticket.event_name || ticket.event_id || ''}\nوضعیت ${STATUS[ticket.status || ticket.order_status] || ticket.status || ticket.order_status || ''}\nورود ${ticket.checked_in_at ? 'ثبت شده' : 'ثبت نشده'}\nصاحب بلیت ${ticket.first_name || ''} ${ticket.last_name || ''}`);
+      return send(`کد پذیرش: ${shortTicketCode(ticket.checkin_code)}\nرویداد: ${ticket.event_name || ticket.event_id || ''}\nوضعیت: ${STATUS[ticket.status || ticket.order_status] || ticket.status || ticket.order_status || ''}\nورود: ${ticket.checked_in_at ? 'ثبت شده' : 'ثبت نشده'}\nصاحب بلیت: ${ticket.first_name || ''} ${ticket.last_name || ''}`);
     }
     if (command === 'attend_ticket') {
       const ticket = await store.checkIn(arg, from.id);
@@ -387,8 +391,8 @@ export async function handleUpdate(update, env, store) {
     if (['export_tickets', 'preview_tickets'].includes(command)) {
       const eventId = positive(arg);
       const tickets = await collectPages(opts => store.listTickets({ ...opts, eventId }));
-      if (command === 'preview_tickets') return send(tickets.slice(0, 50).map(t => `${t.legacy_code || t.id}  ${t.first_name || ''} ${t.last_name || ''}  ${t.checked_in_at ? 'حاضر' : 'ثبت ورود نشده'}`).join('\n') || 'بلیت پیدا نشد');
-      await store.enqueue('sendDocument', { chat_id: chat.id, filename: `tickets-${eventId}.csv`, _documentText: csv(tickets, [['id', 'شناسه'], ['legacy_code', 'کد قدیمی'], ['event_name', 'رویداد'], ['first_name', 'نام'], ['last_name', 'نام خانوادگی'], ['user_id', 'شناسه کاربر'], ['order_status', 'وضعیت سفارش'], ['checked_in_at', 'زمان ورود']]) }, `${updateKey}:csv`);
+      if (command === 'preview_tickets') return send(tickets.slice(0, 50).map(t => `${shortTicketCode(t.checkin_code)}  ${t.first_name || ''} ${t.last_name || ''}  ${t.checked_in_at ? 'حاضر' : 'ثبت ورود نشده'}`).join('\n') || 'بلیت پیدا نشد');
+      await store.enqueue('sendDocument', { chat_id: chat.id, filename: `tickets-${eventId}.csv`, _documentText: csv(tickets, [[t => shortTicketCode(t.checkin_code), 'کد پذیرش'], ['legacy_code', 'کد قدیمی'], ['event_name', 'رویداد'], ['first_name', 'نام'], ['last_name', 'نام خانوادگی'], ['user_id', 'شناسه کاربر'], ['order_status', 'وضعیت سفارش'], ['checked_in_at', 'زمان ورود']]) }, `${updateKey}:csv`);
       return send(`خروجی ${tickets.length} بلیت آماده شد\nخروجی هر درخواست حداکثر هزار ردیف است`, undefined, 'export_info');
     }
     if (command === 'print_tickets') return send('برای چاپ بلیتهای رویداد وارد پنل شوید و از بخش بلیتهای رویداد گزینه چاپ را انتخاب کنید\n/admin');

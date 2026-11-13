@@ -129,6 +129,7 @@ def make_migration(data, keep_active=False):
         if event.get("place_id") not in places:
             raise ValueError(f"Event {event['id']} references a missing place")
     rows = {"users": [], "places": [], "events": [], "orders": [], "tickets": []}
+    checkin_codes = set()
     for user_id, user in users.items():
         profile = {key: user[key] for key in PROFILE_FIELDS if key in user}
         profile["registered"] = True
@@ -177,7 +178,12 @@ def make_migration(data, keep_active=False):
             "expires_at": now - 1 if is_reserved else None, "receipt_file_id": None,
             "receipt_type": None, "receipt_key": None, "reviewed_by": None,
             "reviewed_at": None, "created_at": purchased, "updated_at": now})
+        checkin_code = f"{secrets.randbelow(100_000_000):08d}"
+        while checkin_code in checkin_codes:
+            checkin_code = f"{secrets.randbelow(100_000_000):08d}"
+        checkin_codes.add(checkin_code)
         rows["tickets"].append({"id": str(uuid.uuid4()), "token": secrets.token_hex(32),
+            "checkin_code": checkin_code,
             "legacy_code": code, "order_id": order_id,
             "checked_in_at": purchased if is_attended else None, "checked_in_by": None,
             "created_at": purchased})
@@ -198,6 +204,7 @@ def make_migration(data, keep_active=False):
         check.executescript(SCHEMA.read_text(encoding="utf8"))
         check.executescript((MIGRATIONS / "0002_place_map_url.sql").read_text(encoding="utf8"))
         check.executescript((MIGRATIONS / "0003_legacy_event_audience.sql").read_text(encoding="utf8"))
+        check.executescript((MIGRATIONS / "0004_ticket_checkin_code.sql").read_text(encoding="utf8"))
         check.executescript(text)
         if check.execute("PRAGMA foreign_key_check").fetchone():
             raise ValueError("Migration contains broken foreign keys")
