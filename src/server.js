@@ -26,10 +26,10 @@ for (const filename of readdirSync(resolve(root, 'migrations')).filter(x => x.en
     } catch (error) { db.native.exec('ROLLBACK'); throw error; }
   }
 }
-const mime = { '.html': 'text/html;charset=utf-8', '.js': 'application/javascript;charset=utf-8', '.css': 'text/css;charset=utf-8' };
+const mime = { '.html': 'text/html;charset=utf-8', '.js': 'application/javascript;charset=utf-8', '.css': 'text/css;charset=utf-8', '.png': 'image/png', '.ttf': 'font/ttf', '.woff2': 'font/woff2' };
 const env = { ...process.env, DB: db, ASSETS: { async fetch(request) {
   const name = new URL(request.url).pathname.slice(1);
-  if (!['admin.html', 'admin.js', 'style.css', 'ticket.css'].includes(name)) return new Response('Not found', { status: 404 });
+  if (!['admin.html', 'admin.js', 'grid.js', 'style.css', 'ticket.css', 'logo.png'].includes(name) && !/^fonts\/(?:Meem-[A-Za-z]+\.ttf|fontawesome-webfont\.woff2)$/.test(name)) return new Response('Not found', { status: 404 });
   const file = resolve(root, 'public', name);
   if (!existsSync(file)) return new Response('Not found', { status: 404 });
   const ext = '.' + name.split('.').at(-1);

@@ -19,7 +19,7 @@ spec.loader.exec_module(legacy)
 
 FIELDS = {
     "users": "id username first_name last_name phone profile_json is_deleted created_at updated_at",
-    "places": "id name address capacity created_at",
+    "places": "id name address capacity created_at map_url",
     "events": "id name description place_id capacity max_per_user is_paid price payment_instructions starts_at active archived created_at updated_at",
     "orders": "id request_key user_id event_id quantity unit_price status expires_at receipt_file_id receipt_type receipt_key reviewed_by reviewed_at created_at updated_at",
     "tickets": "id token legacy_code order_id checked_in_at checked_in_by created_at",
@@ -42,6 +42,8 @@ def validate_snapshot(snapshot, include_admins=False):
         if not isinstance(rows, list):
             raise ValueError("Expected a list of rows in table " + table)
         for row in rows:
+            if table == "places" and isinstance(row, dict) and "map_url" not in row:
+                row = {**row, "map_url": ""}  # Accept backups made before the map-link migration.
             if not isinstance(row, dict) or set(row) != set(columns.split()):
                 raise ValueError("Missing or unknown columns in table " + table)
             if table == "tickets" and not re.fullmatch(r"[0-9a-f]{64}", str(row["token"])):
@@ -60,6 +62,7 @@ def validate_snapshot(snapshot, include_admins=False):
     check = sqlite3.connect(":memory:")
     try:
         check.executescript((ROOT / "migrations" / "0001_init.sql").read_text(encoding="utf8"))
+        check.executescript((ROOT / "migrations" / "0002_place_map_url.sql").read_text(encoding="utf8"))
         check.executescript(text)
         if check.execute("PRAGMA foreign_key_check").fetchone():
             raise ValueError("Snapshot contains broken foreign keys")

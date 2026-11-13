@@ -9,7 +9,7 @@ import { createDatabase } from '../src/sqlite.js';
 import { Store } from '../src/store.js';
 import { exportBackup } from '../src/backup.js';
 
-const schema = readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8');
+const schema = readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8') + '\n' + readFileSync(new URL('../migrations/0002_place_map_url.sql', import.meta.url), 'utf8');
 test('legacy conversion keeps approved ticket and profile without changing source or trusting old roles', () => {
   const dir = mkdtempSync(join(tmpdir(), 'siahe-migration-'));
   const source = join(dir, 'old.sqlite'), output = join(dir, 'new.sql');

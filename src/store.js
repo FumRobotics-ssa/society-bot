@@ -23,6 +23,18 @@ const string = (v, name, max, required = false) => {
   if ((required && !result) || result.length > max) throw domainError('INVALID_INPUT', `${name} معتبر نیست`);
   return result;
 };
+export function neshanUrl(value) {
+  if (typeof value !== 'string' || !value.trim()) return '';
+  try {
+    const url = new URL(value.trim());
+    const host = url.hostname.toLowerCase();
+    if (url.protocol !== 'https:' || url.username || url.password || !(
+      host === 'neshan.org' || host.endsWith('.neshan.org') ||
+      host === 'nshn.ir' || host.endsWith('.nshn.ir')
+    )) return '';
+    return url.href;
+  } catch { return ''; }
+}
 const paging = (limit, offset) => [Math.min(int(limit, 'تعداد', 1000), 1000), Math.max(0, Number.isSafeInteger(Number(offset)) ? Number(offset) : 0)];
 const mapDbError = (e) => {
   for (const code of Object.keys(ERRORS).sort((a, b) => b.length - a.length)) if (String(e.message).includes(code)) return domainError(code);
@@ -77,10 +89,13 @@ export class Store {
     const old = id ? await this.one('SELECT * FROM places WHERE id=?', int(id, 'شناسه مکان')) : null;
     if (id && !old) throw domainError('NOT_FOUND', 'مکان پیدا نشد');
     const v = { ...(old || {}), ...data };
-    const values = [string(v.name, 'نام مکان', 200, true), string(v.address, 'نشانی', 1000), int(v.capacity, 'ظرفیت', 1000000)];
-    if (id) await this.run('UPDATE places SET name=?,address=?,capacity=? WHERE id=?', ...values, Number(id));
+    const rawMapUrl = string(v.map_url, 'لینک نشان', 1000);
+    const mapUrl = neshanUrl(rawMapUrl);
+    if (rawMapUrl && !mapUrl) throw domainError('INVALID_INPUT', 'لینک نشان باید HTTPS و متعلق به نشان باشد');
+    const values = [string(v.name, 'نام مکان', 200, true), string(v.address, 'نشانی', 1000), int(v.capacity, 'ظرفیت', 1000000), mapUrl];
+    if (id) await this.run('UPDATE places SET name=?,address=?,capacity=?,map_url=? WHERE id=?', ...values, Number(id));
     else {
-      const r = await this.run('INSERT INTO places(name,address,capacity) VALUES(?,?,?)', ...values);
+      const r = await this.run('INSERT INTO places(name,address,capacity,map_url) VALUES(?,?,?,?)', ...values);
       id = r.meta.last_row_id;
     }
     return this.one('SELECT * FROM places WHERE id=?', Number(id));
@@ -94,7 +109,7 @@ export class Store {
     return { deleted: true };
   }
   eventSelect() {
-    return `SELECT e.*,p.name AS place_name,p.address AS place_address,
+    return `SELECT e.*,p.name AS place_name,p.address AS place_address,p.map_url AS place_map_url,
       COALESCE((SELECT SUM(quantity) FROM orders WHERE event_id=e.id AND ${OCCUPIED}),0) AS occupied,
       e.capacity-COALESCE((SELECT SUM(quantity) FROM orders WHERE event_id=e.id AND ${OCCUPIED}),0) AS remaining
       FROM events e LEFT JOIN places p ON p.id=e.place_id`;
@@ -135,7 +150,7 @@ export class Store {
 
   orderSelect() {
     return `SELECT o.*,e.name AS event_name,e.description AS event_description,e.payment_instructions,e.starts_at,
-      e.is_paid,e.price,e.capacity,e.max_per_user,p.name AS place_name,p.address AS place_address,
+      e.is_paid,e.price,e.capacity,e.max_per_user,p.name AS place_name,p.address AS place_address,p.map_url AS place_map_url,
       u.first_name,u.last_name,u.phone,u.username FROM orders o JOIN events e ON e.id=o.event_id
       JOIN users u ON u.id=o.user_id LEFT JOIN places p ON p.id=e.place_id`;
   }
@@ -229,7 +244,7 @@ export class Store {
   ticketSelect() {
     return `SELECT t.*,o.user_id,o.event_id,o.quantity,o.status AS order_status,o.expires_at,o.unit_price,
       CASE WHEN t.checked_in_at IS NOT NULL THEN 'attended' ELSE o.status END AS status,
-      e.name AS event_name,e.starts_at,p.name AS place_name,p.address AS place_address,
+      e.name AS event_name,e.starts_at,p.name AS place_name,p.address AS place_address,p.map_url AS place_map_url,
       u.first_name,u.last_name,u.phone,u.username
       FROM tickets t JOIN orders o ON o.id=t.order_id JOIN events e ON e.id=o.event_id
       JOIN users u ON u.id=o.user_id LEFT JOIN places p ON p.id=e.place_id`;

@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { Store } from '../src/store.js';
 import { createDatabase } from '../src/sqlite.js';
 
-const schema = readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8');
+const schema = readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8') + '\n' + readFileSync(new URL('../migrations/0002_place_map_url.sql', import.meta.url), 'utf8');
 async function fixture(t, { capacity = 3, max = 2, paid = false } = {}) {
   const db = createDatabase();
   db.exec(schema);

@@ -34,7 +34,7 @@ body::before{
   background-image:
     linear-gradient(to right,#74a2f01a 1px,transparent 1px),
     linear-gradient(to bottom,#74a2f01a 1px,transparent 1px);
-  opacity:.55;
+  opacity:.36;
 }
 body::after{
   background-image:
@@ -91,9 +91,11 @@ tr:hover td{background:#0f131a}
 /* Keep the original association artwork crisp while showing it in white on dark surfaces */
 .association-logo{display:block;object-fit:contain;filter:invert(1);mix-blend-mode:screen;flex:none}
 .sidebar-logo{width:72px;height:72px;margin:0 auto 12px}
-.brand-title{display:block;font-size:25px;font-weight:800;color:#ffffff}
+.brand-title{display:block;font-size:36px;font-weight:900;color:#ffffff;white-space:nowrap;line-height:1.3}
 .brand{display:block;text-align:center}
 .brand span{margin-top:3px}
+.brand .brand-title{font-size:36px;font-weight:900;color:#ffffff}
+.brand span:last-child{font-size:12px;white-space:nowrap}
 .login-logo{width:100px;height:100px;margin:0 0 20px auto}
 .welcome-logo{width:110px;height:110px;opacity:.9;margin-left:24px}
 select{
@@ -105,4 +107,20 @@ select{
   background-position:left 14px center;
   background-size:12px 8px;
 }
-@media(max-width:700px){.sidebar-logo{width:48px;height:48px;margin:0 0 8px}.brand{text-align:right}.brand-title{font-size:21px}.welcome-logo{display:none}}
+@media(max-width:700px){.sidebar-logo{width:48px;height:48px;margin:0 0 8px}.brand{text-align:right}.brand .brand-title{font-size:25px}.welcome-logo{display:none}}
+
+/* Font Awesome 4.7 solid icons are served locally. */
+@font-face{font-family:FontAwesome;src:url('/fonts/fontawesome-webfont.woff2') format('woff2');font-weight:normal;font-style:normal;font-display:block}
+.nav-button{display:flex;align-items:center;gap:10px}
+.nav-button.active:before{display:none}
+.nav-button .fa{display:inline-block;flex:none;width:18px;text-align:center;font-family:FontAwesome;font-style:normal;font-weight:normal;font-size:15px;line-height:1;color:inherit;-webkit-font-smoothing:antialiased}
+.fa-tachometer:before{content:"\f0e4"}
+.fa-calendar:before{content:"\f073"}
+.fa-map-marker:before{content:"\f041"}
+.fa-credit-card:before{content:"\f09d"}
+.fa-ticket:before{content:"\f145"}
+.fa-check-circle:before{content:"\f058"}
+.fa-users:before{content:"\f0c0"}
+.fa-bullhorn:before{content:"\f0a1"}
+.fa-user-secret:before{content:"\f21b"}
+.fa-database:before{content:"\f1c0"}

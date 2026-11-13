@@ -22,7 +22,7 @@ if (!motion.matches && window.matchMedia('(pointer: fine)').matches) {
   document.addEventListener('pointermove', event => {
     targetX = event.clientX;
     targetY = event.clientY;
-    document.body.style.setProperty('--grid-opacity', '1');
+    document.body.style.setProperty('--grid-opacity', '.65');
     if (!frame) frame = requestAnimationFrame(followPointer);
   }, { passive: true });
 

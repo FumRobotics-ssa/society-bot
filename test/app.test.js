@@ -8,7 +8,7 @@ import { createLoginCode, exchangeLogin, digest } from '../src/auth.js';
 import { receiveUpdate, processOutbox, processInbox } from '../src/jobs.js';
 
 function fixture() {
-  const db = createDatabase(); db.exec(readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8'));
+  const db = createDatabase(); db.exec(readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8')); db.exec(readFileSync(new URL('../migrations/0002_place_map_url.sql', import.meta.url), 'utf8'));
   const env = { DB: db, OWNER_IDS: '99', PUBLIC_URL: 'https://example.test', WEBHOOK_SECRET: 'a'.repeat(40), BOT_TOKEN: 'fake', ASSETS: { fetch: async () => new Response('asset') } };
   const store = new Store(db);
   const request = (path, init = {}) => handleRequest(new Request(env.PUBLIC_URL + path, init), env, { waitUntil() {} });
@@ -42,6 +42,20 @@ test('public ticket needs unpredictable token and reveals no name or phone', asy
   assert.equal(page.status, 200); assert.ok(!text.includes('PrivateName')); assert.ok(!text.includes('09123456789')); assert.ok(!text.includes('<script>'));
   const image = await request('/ticket/' + ticket.token + '/qr.svg'); assert.equal(image.status, 200); assert.match(await image.text(), /<svg/); db.close();
 });
+test('Neshan location appears on issued ticket and invalid links are rejected', async () => {
+  const { db, store, request } = fixture();
+  await store.upsertUser({ id: 1, first_name: 'علی' });
+  await assert.rejects(store.savePlace({ name: 'سالن', capacity: 5, map_url: 'https://neshan.org.evil.test/maps' }), /لینک نشان/);
+  const place = await store.savePlace({ name: 'سالن', address: 'دانشگاه فردوسی مشهد', capacity: 5, map_url: 'https://neshan.org/maps/places/test' });
+  const event = await store.saveEvent({ name: 'رویداد', place_id: place.id, capacity: 5 });
+  const { tickets } = await store.reserve(1, event.id, 1, 'map-test');
+  const page = await request('/ticket/' + tickets[0].token);
+  const text = await page.text();
+  assert.match(text, /دانشگاه فردوسی مشهد/);
+  assert.match(text, /href="https:\/\/neshan.org\/maps\/places\/test"/);
+  db.close();
+});
+
 test('webhook rejects absent or incorrect secret and deduplicates durable updates', async () => {
   const { db, env, request } = fixture();
   assert.equal((await request('/telegram', { method: 'POST', body: '{"update_id":1}' })).status, 403);

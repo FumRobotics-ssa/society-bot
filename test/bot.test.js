@@ -7,7 +7,7 @@ import { handleUpdate } from '../src/bot.js';
 import { maintenance } from '../src/jobs.js';
 
 function setup() {
-  const db = createDatabase(); db.exec(readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8'));
+  const db = createDatabase(); db.exec(readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8')); db.exec(readFileSync(new URL('../migrations/0002_place_map_url.sql', import.meta.url), 'utf8'));
   const store = new Store(db), env = { PUBLIC_URL: 'https://example.test', OWNER_IDS: '99', VERIFICATION_CHAT: '-100123' };
   let seq = 0;
   const message = (text, extra = {}) => ({ update_id: ++seq, message: { from: { id: 1 }, chat: { id: 1, type: 'private' }, text, ...extra } });
@@ -26,17 +26,20 @@ test('complete signup persists profile and rejects another persons contact', asy
 });
 test('paid reserve receipt owner approval and retried update preserve one order', async () => {
   const f = setup(); await f.store.upsertUser({ id: 1, phone: '09123456789', first_name: 'علی' });
-  const event = await f.store.saveEvent({ name: 'نمایش', capacity: 2, is_paid: 1, price: 50000 });
+  const place = await f.store.savePlace({ name: 'سالن', capacity: 2, map_url: 'https://nshn.ir/example' });
+  const event = await f.store.saveEvent({ name: 'نمایش', place_id: place.id, capacity: 2, is_paid: 1, price: 50000 });
   await f.click('e:' + event.id); const booking = f.message('1');
   await handleUpdate(booking, f.env, f.store); await handleUpdate(booking, f.env, f.store);
   assert.equal((await f.store.listOrders()).length, 1);
   const receipt = f.message('', { photo: [{ file_id: 'safe-photo', file_size: 1000 }] }); await handleUpdate(receipt, f.env, f.store);
+  const receiptPayload = (await f.db.prepare("SELECT payload FROM outbox WHERE method='sendPhoto'").first()).payload;
+  assert.match(receiptPayload, /https:\/\/nshn.ir\/example/);
   const order = (await f.store.listOrders())[0]; assert.equal(order.status, 'pending');
   const review = f.callback(`r:${order.id}:y`); review.callback_query.message.chat = { id: -100123, type: 'supergroup' };
   await handleUpdate(review, f.env, f.store); assert.equal((await f.store.getOrder(order.id)).status, 'pending');
   review.update_id += 100; review.callback_query.from.id = 99;
   await handleUpdate(review, f.env, f.store); assert.equal((await f.store.getOrder(order.id)).status, 'approved');
-  const jobs = (await f.db.prepare('SELECT payload FROM outbox').all()).results; assert.ok(jobs.some(j => j.payload.includes('/ticket/'))); f.db.close();
+  const jobs = (await f.db.prepare('SELECT payload FROM outbox').all()).results; assert.ok(jobs.some(j => j.payload.includes('/ticket/'))); assert.ok(jobs.some(j => j.payload.includes('https://nshn.ir/example'))); f.db.close();
 });
 
 test('receipt review shows student status and previously approved tickets for the same event', async () => {

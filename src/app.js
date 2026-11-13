@@ -1,5 +1,5 @@
 import qr from 'qrcode-generator';
-import { Store } from './store.js';
+import { Store, neshanUrl } from './store.js';
 import { exchangeLogin, getSession, sessionCookie, validOrigin, cookieToken, digest, now, safeEqual } from './auth.js';
 import { receiveUpdate, runJobs } from './jobs.js';
 import { exportBackup } from './backup.js';
@@ -32,9 +32,9 @@ export function csv(rows) {
 function download(content, filename, type) { return new Response(content, { headers: { 'Content-Type': type, 'Content-Disposition': `attachment; filename="${filename}"` } }); }
 function qrSvg(url) { const code = qr(0, 'M'); code.addData(url); code.make(); return code.createSvgTag({ cellSize: 4, margin: 16, scalable: true }); }
 function ticketHTML(ticket, env, print = false) {
-  const url = `${env.PUBLIC_URL.replace(/\/$/, '')}/ticket/${ticket.token}`;
+  const mapUrl = neshanUrl(ticket.place_map_url);
   const valid = ticket.order_status === 'approved';
-  return `<article class="ticket"><img class="association-logo" src="/logo.png" alt="نشان انجمن رباتیک دانشگاه فردوسی مشهد" width="76" height="76"><p>انجمن علمی رباتیک دانشگاه فردوسی مشهد</p><h2>${esc(ticket.event_name)}</h2><p>${valid ? ticket.checked_in_at ? 'ورود ثبت شده' : 'بلیت معتبر' : 'این بلیت معتبر نیست'}</p><img src="/ticket/${ticket.token}/qr.svg" alt="کد QR بلیت" width="240" height="240"><p dir="ltr">${esc(ticket.legacy_code || ticket.id)}</p>${print ? `<p>${esc(ticket.first_name)} ${esc(ticket.last_name)}</p>` : ''}<p>برای ثبت ورود کد را به مسئول پذیرش نشان دهید</p></article>`;
+  return `<article class="ticket"><img class="association-logo" src="/logo.png" alt="نشان انجمن رباتیک دانشگاه فردوسی مشهد" width="76" height="76"><p>انجمن علمی رباتیک دانشگاه فردوسی مشهد</p><h2>${esc(ticket.event_name)}</h2>${ticket.place_name ? `<p>مکان: ${esc(ticket.place_name)}</p>` : ''}${ticket.place_address ? `<p>نشانی: ${esc(ticket.place_address)}</p>` : ''}${mapUrl ? `<p><a class="ticket-map" href="${esc(mapUrl)}" target="_blank" rel="noopener noreferrer">موقعیت و مسیریابی در نشان</a></p>` : ''}<p>${valid ? ticket.checked_in_at ? 'ورود ثبت شده' : 'بلیت معتبر' : 'این بلیت معتبر نیست'}</p><img src="/ticket/${ticket.token}/qr.svg" alt="کد QR بلیت" width="240" height="240"><p dir="ltr">${esc(ticket.legacy_code || ticket.id)}</p>${print ? `<p>${esc(ticket.first_name)} ${esc(ticket.last_name)}</p>` : ''}<p>برای ثبت ورود کد را به مسئول پذیرش نشان دهید</p></article>`;
 }
 function page(content, title = 'بلیت انجمن رباتیک') { return `<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><link rel="stylesheet" href="/ticket.css"><body><main>${content}</main></body></html>`; }
 function pagination(url) { return { limit: Math.min(200, Math.max(1, Number(url.searchParams.get('limit')) || 100)), offset: Math.max(0, Number(url.searchParams.get('offset')) || 0) }; }
@@ -171,7 +171,7 @@ async function route(request, env, ctx) {
   }
   if (url.pathname === '/') return Response.redirect(new URL('/admin', request.url), 302);
   const assets = ['/admin', '/admin.html', '/admin.js', '/grid.js', '/style.css', '/ticket.css', '/logo.png'];
-  if (!assets.includes(url.pathname)) fail('مسیر پیدا نشد', 404);
+  if (!assets.includes(url.pathname) && !/^\/fonts\/(?:Meem-[A-Za-z]+\.ttf|fontawesome-webfont\.woff2)$/.test(url.pathname)) fail('مسیر پیدا نشد', 404);
   const asset = new URL(request.url); if (url.pathname === '/admin') asset.pathname = '/admin.html';
   return env.ASSETS.fetch(new Request(asset, request));
 }

@@ -1,4 +1,5 @@
 import { createLoginCode } from './auth.js';
+import { neshanUrl } from './store.js';
 
 const FA_DIGITS = '۰۱۲۳۴۵۶۷۸۹';
 const AR_DIGITS = '٠١٢٣٤٥٦٧٨٩';
@@ -58,7 +59,7 @@ function eventTime(value) {
   return new Intl.DateTimeFormat('fa-IR', { timeZone: 'Asia/Tehran', calendar: 'gregory', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(date);
 }
 function eventText(event) {
-  return [event.name, event.description || '', `شناسه: ${event.id}`, `مکان: ${event.place_name || 'بدون مکان مشخص'}`, event.address || event.place_address ? `نشانی: ${event.address || event.place_address}` : '', `زمان: ${eventTime(event.starts_at)}`, `ظرفیت: ${event.capacity}`, event.remaining != null ? `ظرفیت باقی‌مانده: ${event.remaining}` : '', `سقف بلیت برای هر نفر: ${event.max_per_user}`, event.is_paid ? `قیمت هر بلیت: ${money(event.price)} تومان` : 'قیمت: رایگان', `وضعیت: ${event.active ? 'فعال' : 'غیرفعال'}`].filter(Boolean).join('\n');
+  return [event.name, event.description || '', `شناسه: ${event.id}`, `مکان: ${event.place_name || 'بدون مکان مشخص'}`, event.address || event.place_address ? `نشانی: ${event.address || event.place_address}` : '', neshanUrl(event.place_map_url) ? `موقعیت در نشان: ${neshanUrl(event.place_map_url)}` : '', `زمان: ${eventTime(event.starts_at)}`, `ظرفیت: ${event.capacity}`, event.remaining != null ? `ظرفیت باقی‌مانده: ${event.remaining}` : '', `سقف بلیت برای هر نفر: ${event.max_per_user}`, event.is_paid ? `قیمت هر بلیت: ${money(event.price)} تومان` : 'قیمت: رایگان', `وضعیت: ${event.active ? 'فعال' : 'غیرفعال'}`].filter(Boolean).join('\n');
 }
 function orderText(order) {
   return `${order.event_name || 'رویداد'}\nشناسه سفارش: ${order.id}\nتعداد بلیت: ${order.quantity}\nوضعیت: ${STATUS[order.status] || order.status}`;
@@ -79,8 +80,9 @@ export async function notifyOrder(order, env, store, key = `order:${order.id}`) 
     await store.enqueue('sendMessage', { chat_id: order.user_id, text: orderText(order) }, `${key}:${order.status}`);
     return;
   }
+  const mapUrl = neshanUrl(order.place_map_url);
   for (let start = 0; start < Math.max(tickets.length, 1); start += 20) {
-    await store.enqueue('sendMessage', { chat_id: order.user_id, text: `ثبت نام شما تأیید شد\n${orderText(order)}\nبرای مشاهده بلیت و کد QR دکمه‌های زیر را باز کنید`, reply_markup: { inline_keyboard: tickets.slice(start, start + 20).map((ticket, i) => [{ text: `بلیت ${start + i + 1}`, url: link(env, `/ticket/${ticket.token}`) }]) } }, `${key}:approved:${start}`);
+    await store.enqueue('sendMessage', { chat_id: order.user_id, text: `ثبت نام شما تأیید شد\n${orderText(order)}\nبرای مشاهده بلیت و کد QR دکمه‌های زیر را باز کنید`, reply_markup: { inline_keyboard: [...tickets.slice(start, start + 20).map((ticket, i) => [{ text: `بلیت ${start + i + 1}`, url: link(env, `/ticket/${ticket.token}`) }]), ...(mapUrl ? [[{ text: 'موقعیت مکان در نشان', url: mapUrl }]] : [])] } }, `${key}:approved:${start}`);
   }
 }
 
@@ -233,17 +235,20 @@ export async function handleUpdate(update, env, store) {
           const user = await store.getUser(from.id);
           const isFumStudent = profileOf(user).is_fum_student;
           const previousTickets = await store.countApprovedTickets(from.id, order.event_id);
+          const placeMapUrl = neshanUrl(order.place_map_url);
           const receiptCaption = [
             `کد سفارش ${order.id}`,
             `شناسه کاربر ${order.user_id}`,
             `نام و نام خانوادگی ${[order.first_name, order.last_name].filter(Boolean).join(' ') || 'ثبت نشده'}`,
             `دانشجوی فردوسی ${isFumStudent == null ? 'نامشخص' : isFumStudent ? 'بله' : 'خیر'}`,
             `نام رویداد ${order.event_name || 'نامشخص'}`,
+            order.place_name ? `مکان: ${String(order.place_name).slice(0, 120)}` : '',
+            order.place_address ? `نشانی: ${String(order.place_address).slice(0, 160)}` : '',
             `تعداد بلیت درخواستی ${order.quantity}`,
             `تعداد بلیت‌های قبلا خریداری شده ${previousTickets}`,
             `مبلغ کل ${money(Number(order.unit_price) * Number(order.quantity))} تومان`,
           ].join('\n');
-          await store.enqueue(photo ? 'sendPhoto' : 'sendDocument', { chat_id: env.VERIFICATION_CHAT, [photo ? 'photo' : 'document']: order.receipt_file_id, caption: receiptCaption, reply_markup: { inline_keyboard: [[{ text: 'تأیید پرداخت', callback_data: `r:${order.id}:y` }, { text: 'رد درخواست', callback_data: `r:${order.id}:n` }]] } }, `receipt:${order.id}:${order.receipt_file_id}`);
+          await store.enqueue(photo ? 'sendPhoto' : 'sendDocument', { chat_id: env.VERIFICATION_CHAT, [photo ? 'photo' : 'document']: order.receipt_file_id, caption: receiptCaption.slice(0, 1000), reply_markup: { inline_keyboard: [[{ text: 'تأیید پرداخت', callback_data: `r:${order.id}:y` }, { text: 'رد درخواست', callback_data: `r:${order.id}:n` }], ...(placeMapUrl ? [[{ text: 'موقعیت در نشان', url: placeMapUrl }]] : [])] } }, `receipt:${order.id}:${order.receipt_file_id}`);
           await send('رسید شما برای بررسی فرستاده شد\nنتیجه از همین ربات به شما اطلاع داده می‌شود', MENU);
           await store.setState(from.id, 'idle', { last_update_id: update.update_id });
           return;

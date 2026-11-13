@@ -16,7 +16,8 @@ import sys
 import time
 import uuid
 
-SCHEMA = Path(__file__).resolve().parents[1] / "migrations" / "0001_init.sql"
+MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
+SCHEMA = MIGRATIONS / "0001_init.sql"
 DESTINATION_TABLES = (
     "users", "places", "events", "orders", "tickets", "admins", "audit_log",
     "conversation_states", "inbox", "outbox", "admin_sessions", "login_codes",
@@ -194,6 +195,7 @@ def make_migration(data, keep_active=False):
     check = sqlite3.connect(":memory:")
     try:
         check.executescript(SCHEMA.read_text(encoding="utf8"))
+        check.executescript((MIGRATIONS / "0002_place_map_url.sql").read_text(encoding="utf8"))
         check.executescript(text)
         if check.execute("PRAGMA foreign_key_check").fetchone():
             raise ValueError("Migration contains broken foreign keys")

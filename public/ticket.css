@@ -16,3 +16,6 @@ body{background:#0f131a}
   .ticket{background:#ffffff;color:#0f131a;border-color:#0f131a}
   .ticket .association-logo{filter:none;mix-blend-mode:multiply}
 }
+
+.ticket-map{display:inline-block;color:#74a2f0;text-decoration:underline;text-underline-offset:4px}
+@media print{.ticket-map{color:#0f131a}}

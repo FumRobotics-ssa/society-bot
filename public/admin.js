@@ -174,10 +174,12 @@ function editEvent(event = null) {
   form.hidden = false; form.scrollIntoView({ behavior: 'smooth', block: 'start' }); form.elements.namedItem('name').focus();
 }
 function showPlaces() {
-  table($('places-list'), ['مکان', 'نشانی', 'ظرفیت', 'مدیریت'], state.places.map((place) => {
+  table($('places-list'), ['مکان', 'نشانی', 'نشان', 'ظرفیت', 'مدیریت'], state.places.map((place) => {
     const actions = el('div', null, 'actions');
-    actions.append(button('ویرایش', () => { const form = $('place-form'); ['id', 'name', 'capacity', 'address'].forEach((key) => { form.elements.namedItem(key).value = place[key] ?? ''; }); $('place-form-title').textContent = 'ویرایش مکان'; form.scrollIntoView({ behavior: 'smooth' }); form.elements.namedItem('name').focus(); }), button('حذف', async () => { if (!confirm('این مکان حذف شود؟')) return; await api('/api/places/' + encodeURIComponent(place.id), { method: 'DELETE' }); await load(); }, 'button danger small'));
-    return [place.name, el('span', place.address || '', 'description'), number(place.capacity), actions];
+    actions.append(button('ویرایش', () => { const form = $('place-form'); ['id', 'name', 'capacity', 'address', 'map_url'].forEach((key) => { form.elements.namedItem(key).value = place[key] ?? ''; }); $('place-form-title').textContent = 'ویرایش مکان'; form.scrollIntoView({ behavior: 'smooth' }); form.elements.namedItem('name').focus(); }), button('حذف', async () => { if (!confirm('این مکان حذف شود؟')) return; await api('/api/places/' + encodeURIComponent(place.id), { method: 'DELETE' }); await load(); }, 'button danger small'));
+    const map = place.map_url ? el('a', 'باز کردن در نشان', 'receipt-link') : el('span', '—');
+    if (place.map_url) { map.href = place.map_url; map.target = '_blank'; map.rel = 'noopener noreferrer'; }
+    return [place.name, el('span', place.address || '', 'description'), map, number(place.capacity), actions];
   }));
 }
 async function showOrders() {
@@ -335,7 +337,7 @@ $('event-form').addEventListener('submit', (event) => {
 });
 $('place-form').addEventListener('submit', (event) => {
   event.preventDefault(); const form = event.currentTarget; const data = new FormData(form);
-  action(event.submitter, async () => { const id = data.get('id'); await api('/api/places' + (id ? '/' + encodeURIComponent(id) : ''), { method: id ? 'PATCH' : 'POST', body: { name: data.get('name').trim(), address: data.get('address').trim(), capacity: Number(data.get('capacity')) } }); form.reset(); form.elements.namedItem('id').value = ''; $('place-form-title').textContent = 'افزودن مکان'; await load(); toast('مکان ذخیره شد'); });
+  action(event.submitter, async () => { const id = data.get('id'); await api('/api/places' + (id ? '/' + encodeURIComponent(id) : ''), { method: id ? 'PATCH' : 'POST', body: { name: data.get('name').trim(), address: data.get('address').trim(), map_url: data.get('map_url').trim(), capacity: Number(data.get('capacity')) } }); form.reset(); form.elements.namedItem('id').value = ''; $('place-form-title').textContent = 'افزودن مکان'; await load(); toast('مکان ذخیره شد'); });
 });
 $('reset-place').addEventListener('click', () => { $('place-form').reset(); $('place-form').elements.namedItem('id').value = ''; $('place-form-title').textContent = 'افزودن مکان'; });
 ['order-status', 'orders-event', 'tickets-event'].forEach((id) => $(id).addEventListener('change', () => { state.pages[id === 'tickets-event' ? 'tickets' : 'orders'] = 0; load(); }));

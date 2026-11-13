@@ -28,16 +28,16 @@
     <aside class="sidebar">
       <a href="/admin" class="brand" aria-label="انجمن علمی رباتیک دانشگاه فردوسی مشهد صفحه مدیریت"><img class="association-logo sidebar-logo" src="/logo.png" alt="" width="72" height="72"><span class="brand-title">انجمن رباتیک</span><span>دانشگاه فردوسی مشهد</span></a>
       <nav aria-label="بخش‌های مدیریت" id="nav">
-        <button data-view="overview" class="nav-button">نمای کلی</button>
-        <button data-view="events" class="nav-button">رویدادها</button>
-        <button data-view="places" class="nav-button">مکان‌ها</button>
-        <button data-view="orders" class="nav-button">بررسی پرداخت‌ها</button>
-        <button data-view="tickets" class="nav-button">بلیت‌ها</button>
-        <button data-view="checkin" class="nav-button">ثبت ورود</button>
-        <button data-view="users" class="nav-button">شرکت‌کنندگان</button>
-        <button data-view="broadcast" class="nav-button">پیام‌رسانی</button>
-        <button data-view="admins" class="nav-button owner-only">مدیران</button>
-        <button data-view="settings" class="nav-button">داده‌ها و پشتیبان</button>
+        <button data-view="overview" class="nav-button"><i class="fa fa-tachometer" aria-hidden="true"></i><span>نمای کلی</span></button>
+        <button data-view="events" class="nav-button"><i class="fa fa-calendar" aria-hidden="true"></i><span>رویدادها</span></button>
+        <button data-view="places" class="nav-button"><i class="fa fa-map-marker" aria-hidden="true"></i><span>مکان‌ها</span></button>
+        <button data-view="orders" class="nav-button"><i class="fa fa-credit-card" aria-hidden="true"></i><span>بررسی پرداخت‌ها</span></button>
+        <button data-view="tickets" class="nav-button"><i class="fa fa-ticket" aria-hidden="true"></i><span>بلیت‌ها</span></button>
+        <button data-view="checkin" class="nav-button"><i class="fa fa-check-circle" aria-hidden="true"></i><span>ثبت ورود</span></button>
+        <button data-view="users" class="nav-button"><i class="fa fa-users" aria-hidden="true"></i><span>شرکت‌کنندگان</span></button>
+        <button data-view="broadcast" class="nav-button"><i class="fa fa-bullhorn" aria-hidden="true"></i><span>پیام‌رسانی</span></button>
+        <button data-view="admins" class="nav-button owner-only"><i class="fa fa-user-secret" aria-hidden="true"></i><span>مدیران</span></button>
+        <button data-view="settings" class="nav-button"><i class="fa fa-database" aria-hidden="true"></i><span>داده‌ها و پشتیبان</span></button>
       </nav>
       <div class="sidebar-footer"><span id="identity"></span><button id="logout" class="text-button">خروج از حساب</button></div>
     </aside>
@@ -72,7 +72,7 @@
         <div id="events-list" class="event-grid"></div>
       </section>
       <section id="view-places" data-panel="places" hidden>
-        <form id="place-form" class="panel form-panel"><h2 id="place-form-title">افزودن مکان</h2><input name="id" type="hidden"><div class="form-grid"><label>نام مکان<input name="name" maxlength="200" required></label><label>ظرفیت<input name="capacity" type="number" min="1" max="100000" required></label><label class="full">نشانی<textarea name="address" rows="2" maxlength="1000" required></textarea></label></div><div class="form-actions"><button class="button" type="submit">ذخیره مکان</button><button id="reset-place" class="button secondary" type="button">پاک کردن فرم</button></div></form>
+        <form id="place-form" class="panel form-panel"><h2 id="place-form-title">افزودن مکان</h2><input name="id" type="hidden"><div class="form-grid"><label>نام مکان<input name="name" maxlength="200" required></label><label>ظرفیت<input name="capacity" type="number" min="1" max="100000" required></label><label class="full">نشانی<textarea name="address" rows="2" maxlength="1000" required></textarea></label><label class="full">لینک مکان در نشان<input name="map_url" type="url" dir="ltr" inputmode="url" maxlength="1000" placeholder="https://neshan.org/maps/..."><small>لینک اشتراک‌گذاری مکان را از نشان کپی کنید</small></label></div><div class="form-actions"><button class="button" type="submit">ذخیره مکان</button><button id="reset-place" class="button secondary" type="button">پاک کردن فرم</button></div></form>
         <div id="places-list"></div>
       </section>
       <section id="view-orders" data-panel="orders" hidden>
