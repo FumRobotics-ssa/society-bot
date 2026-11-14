@@ -22,3 +22,11 @@ migrations_dir = "migrations"
 
 [triggers]
 crons = ["* * * * *"]
+
+[[ratelimits]]
+name = "CHECKIN_RATE_LIMITER"
+namespace_id = "9472061843"
+
+[ratelimits.simple]
+limit = 120
+period = 60

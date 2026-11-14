@@ -83,6 +83,10 @@ async function api(request, env, store, url) {
     return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie(request, '', 0) });
   }
   if (path === '/api/check-in' && method === 'POST') {
+    if (env.CHECKIN_RATE_LIMITER) {
+      const { success } = await env.CHECKIN_RATE_LIMITER.limit({ key: `admin:${session.user_id}` });
+      if (!success) fail('تعداد درخواست‌های پذیرش زیاد است؛ کمی بعد دوباره تلاش کنید', 429);
+    }
     let { token } = await body(request); token = String(token || '').trim();
     if (token.includes('/ticket/')) token = token.split('/ticket/').at(-1).split(/[?#]/)[0];
     const ticket = await store.checkIn(token, session.user_id);
@@ -199,5 +203,6 @@ export async function handleRequest(request, env, ctx = { waitUntil: promise => 
   hardened.headers.set('Cache-Control', 'no-store');
   hardened.headers.set('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
   hardened.headers.set('Permissions-Policy', 'camera=(self), microphone=(), geolocation=()');
+  hardened.headers.set('Strict-Transport-Security', 'max-age=31536000');
   return hardened;
 }

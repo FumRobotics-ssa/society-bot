@@ -1,4 +1,5 @@
 export const SESSION_COOKIE = 'robotics_society_session';
+const SESSION_TTL = 4 * 3600;
 const encoder = new TextEncoder();
 const hex = bytes => [...new Uint8Array(bytes)].map(b => b.toString(16).padStart(2, '0')).join('');
 export const now = () => Math.floor(Date.now() / 1000);
@@ -24,7 +25,7 @@ export async function exchangeLogin(db, token) {
   const row = await db.prepare('DELETE FROM login_codes WHERE token_hash=? AND expires_at>? RETURNING user_id').bind(await digest(token), now()).first();
   if (!row) return null;
   const session = crypto.randomUUID().replaceAll('-', '') + crypto.randomUUID().replaceAll('-', '');
-  await db.prepare('INSERT INTO admin_sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').bind(await digest(session), row.user_id, now() + 8 * 3600).run();
+  await db.prepare('INSERT INTO admin_sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').bind(await digest(session), row.user_id, now() + SESSION_TTL).run();
   return { token: session, user_id: row.user_id };
 }
 export function cookieToken(request) {
@@ -38,7 +39,7 @@ export async function getSession(request, env, store) {
   const role = await roleFor(env, store, row.user_id);
   return role ? { user_id: row.user_id, role } : null;
 }
-export function sessionCookie(request, token, maxAge = 28800) {
+export function sessionCookie(request, token, maxAge = SESSION_TTL) {
   const url = new URL(request.url);
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
   return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${local && url.protocol === 'http:' ? '' : '; Secure'}`;
