@@ -204,14 +204,21 @@ function fillFilters() {
   });
   document.querySelectorAll('.audience-event-filter').forEach((select) => {
     const previous = select.value;
+    const participantsFilter = select.id === 'users-event';
     const option = el('option', select.dataset.allLabel || 'همه رویدادها'); option.value = '';
     select.replaceChildren(option);
-    state.audienceEvents.forEach((event) => {
+    if (participantsFilter) {
+      const noEvent = el('option', 'بدون سابقهٔ شرکت در رویداد');
+      noEvent.value = 'no-event'; select.append(noEvent);
+    }
+    const visibleEvents = state.audienceEvents.filter((event) => !participantsFilter || (!event.is_test && Number(event.participant_count) > 0));
+    visibleEvents.forEach((event) => {
       const oldLabel = event.kind === 'legacy' ? ' · رویداد قدیمی' : '';
       const item = el('option', `${event.name} · ${number(event.participant_count)} نفر${oldLabel}`);
       item.value = event.audience_key; select.append(item);
     });
-    if (state.audienceEvents.some((event) => event.audience_key === previous)) select.value = previous;
+    if (participantsFilter && previous === 'no-event') select.value = previous;
+    else if (visibleEvents.some((event) => event.audience_key === previous)) select.value = previous;
   });
   const select = $('event-place'); const old = select.value;
   const option = el('option', 'بدون مکان مشخص'); option.value = '';

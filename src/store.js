@@ -1,4 +1,5 @@
 const OCCUPIED = "(status='approved' OR (status IN ('reserved','pending') AND expires_at>unixepoch()))";
+const TEST_EVENT_NAME = /(?:^|[^\p{L}\p{N}])(?:test(?:ing)?|demo|sample|تست(?:ی)?|آزمایش(?:ی)?|نمونه(?:ی)?)(?=$|[^\p{L}\p{N}])/iu;
 const ERRORS = {
   EVENT_FULL: 'ظرفیت رویداد تکمیل شده است',
   USER_LIMIT: 'تعداد بلیت از سقف مجاز هر نفر بیشتر است',
@@ -116,7 +117,10 @@ export class Store {
         values.push(`%${numeric}%`, `%${numeric}%`, `%${numeric}%`);
       }
     }
-    if (selectedAudience) {
+    if (selectedAudience === 'no-event') {
+      where.push(`NOT EXISTS (SELECT 1 FROM orders o WHERE o.user_id=u.id AND o.status='approved')
+        AND NOT EXISTS (SELECT 1 FROM legacy_event_participants ep WHERE ep.user_id=u.id)`);
+    } else if (selectedAudience) {
       const selected = audienceKey(selectedAudience);
       if (!selected) throw domainError('INVALID_INPUT', 'دسته رویداد معتبر نیست');
       if (selected.kind === 'legacy') {
@@ -139,7 +143,7 @@ export class Store {
       ORDER BY u.created_at DESC,u.id LIMIT ? OFFSET ?`, ...values, ...paging(limit, offset))).map(userRow);
   }
   async listAudienceEvents({ limit = 1000, offset = 0 } = {}) {
-    return this.all(`SELECT audience_key,id,name,kind,participant_count FROM (
+    const events = await this.all(`SELECT audience_key,id,name,kind,participant_count FROM (
       SELECT 'current:' || e.id AS audience_key,e.id,e.name,'current' AS kind,
         (SELECT COUNT(DISTINCT o.user_id) FROM orders o JOIN users u ON u.id=o.user_id
           WHERE o.event_id=e.id AND o.status='approved' AND u.phone<>'') AS participant_count
@@ -150,6 +154,7 @@ export class Store {
           WHERE ep.legacy_event_id=le.id AND u.phone<>'')
       FROM legacy_events le
     ) ORDER BY kind,id DESC LIMIT ? OFFSET ?`, ...paging(limit, offset));
+    return events.map(event => ({ ...event, is_test: TEST_EVENT_NAME.test(String(event.name || '')) }));
   }
   async getAudienceEvent(key) {
     const selected = audienceKey(key);
