@@ -269,7 +269,12 @@ export async function handleUpdate(update, env, store) {
       return send('به سامانه ثبت‌نام رویدادها خوش آمدید\nبرای ساخت حساب /add_account و برای دیدن رویدادها /available_events را بفرستید', MENU);
     }
     if (command === 'id') return send(`شناسه تلگرام شما ${from.id}`);
-    if (command === 'help') return send('ثبت نام /add_account\nاطلاعات حساب /get_account\nرویدادها /available_events\nسفارشها و بلیتهای من /my_tickets\nشناسه گفتگو /chatid\nتوقف مرحله جاری /cancel\nحذف اطلاعات حساب /delete_account' + (isChecker ? '\nپنل مدیریت /admin\nبرای راهنمای مدیر /admin_help' : ''), MENU);
+    if (command === 'help') {
+      const guide = 'ثبت نام /add_account\nاطلاعات حساب /get_account\nرویدادها /available_events\nسفارشها و بلیتهای من /my_tickets\nشناسه گفتگو /chatid\nتوقف مرحله جاری /cancel\nحذف اطلاعات حساب /delete_account';
+      if (isAdmin) return send(`${guide}\nپنل مدیریت /admin\nراهنمای مدیر /admin_help`, MENU);
+      if (isChecker) return send(`${guide}\nپنل پذیرش /admin\nراهنمای پذیرش /checkin_help`, MENU);
+      return send(guide, MENU);
+    }
     if (command === 'cancel') {
       await send('مرحله جاری متوقف شد\nبرای لغو رزرو از بخش بلیتهای من وارد سفارش شوید', MENU);
       await store.clearState(from.id);
@@ -298,7 +303,11 @@ export async function handleUpdate(update, env, store) {
     if (command === 'admin') return panel();
     if (command === 'promote_me') return send('رمز مشترک ارتقای مدیر در این نسخه حذف شده است\nمالک ربات باید دسترسی مدیر را تعیین کند');
     if (!isChecker) return send('این دستور موجود نیست یا اجازه اجرای آن را ندارید');
-    if (command === 'admin_help') return send('پنل مدیریت /admin\nبررسی بلیت /get_ticket CODE\nثبت ورود /attend_ticket CODE' + (isAdmin ? '\nفهرست رویدادها /get_events\nفهرست مکانها /get_places\nگزارش ظرفیت /count_tickets\nراهنمای ساخت مکان /add_place\nراهنمای ساخت رویداد /add_event\nخروجی کاربران /export_users\nخروجی بلیتها /export_tickets EVENT_ID\nپیام به همه /message_all\nپیام به رویداد /message_event' : ''));
+    if (command === 'admin_help') {
+      if (!isAdmin) return send('این دستور موجود نیست یا اجازه اجرای آن را ندارید');
+      return send('پنل مدیریت /admin\nبررسی بلیت /get_ticket CODE\nثبت ورود /attend_ticket CODE\nفهرست رویدادها /get_events\nفهرست مکانها /get_places\nگزارش ظرفیت /count_tickets\nراهنمای ساخت مکان /add_place\nراهنمای ساخت رویداد /add_event\nخروجی کاربران /export_users\nخروجی بلیتها /export_tickets EVENT_ID\nپیام به همه /message_all\nپیام به رویداد /message_event');
+    }
+    if (command === 'checkin_help') return send('پنل پذیرش /admin\nبررسی بلیت /get_ticket CODE\nثبت ورود /attend_ticket CODE');
     if (command === 'get_ticket') {
       const ticket = await store.getTicket(arg);
       if (!ticket) return send('بلیت پیدا نشد');
