@@ -217,3 +217,24 @@ test('admin_help and checkin_help format commands with LTR isolation for authori
 
   f.db.close();
 });
+test('bot displays poster as photo when event has poster and as text when no poster', async () => {
+  const f = setup();
+  await f.store.upsertUser({ id: 1, phone: '09123456789', first_name: 'علی' });
+
+  const noPosterEvent = await f.store.saveEvent({ name: 'رویداد ساده', capacity: 5 });
+  await f.click(`e:${noPosterEvent.id}`);
+  let outbox = (await f.db.prepare("SELECT method, payload FROM outbox ORDER BY id DESC LIMIT 1").all()).results;
+  assert.equal(outbox[0].method, 'sendMessage');
+  assert.match(JSON.parse(outbox[0].payload).text, /رویداد ساده/);
+
+  const posterEvent = await f.store.saveEvent({ name: 'رویداد با پوستر', capacity: 5, poster_url: 'https://example.test/poster.jpg' });
+  await f.click(`e:${posterEvent.id}`);
+  outbox = (await f.db.prepare("SELECT method, payload FROM outbox ORDER BY id DESC LIMIT 1").all()).results;
+  assert.equal(outbox[0].method, 'sendPhoto');
+  const photoPayload = JSON.parse(outbox[0].payload);
+  assert.equal(photoPayload.photo, 'https://example.test/poster.jpg');
+  assert.match(photoPayload.caption, /رویداد با پوستر/);
+  assert.match(photoPayload.caption, /تعداد بلیت مورد نظر را وارد کنید/);
+
+  f.db.close();
+});

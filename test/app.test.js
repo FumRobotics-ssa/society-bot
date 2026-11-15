@@ -92,3 +92,34 @@ test('login issues the Robotics Society session cookie and it authenticates requ
   assert.equal((await request('/api/me', { headers: { Cookie: cookie.split(';')[0] } })).status, 200);
   db.close();
 });
+test('public event poster endpoint and ticket layout with poster and without poster', async () => {
+  const { db, store, request } = fixture();
+  await store.upsertUser({ id: 1, first_name: 'رضا' });
+
+  const plainEvent = await store.saveEvent({ name: 'بدون پوستر', capacity: 2 });
+  const { tickets: plainTickets } = await store.reserve(1, plainEvent.id, 1, 'order-plain');
+  const plainPage = await (await request('/ticket/' + plainTickets[0].token)).text();
+  assert.ok(!plainPage.includes('ticket-poster-pane'));
+  assert.equal((await request(`/api/events/${plainEvent.id}/poster`)).status, 404);
+
+  const sampleDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  const posterEvent = await store.saveEvent({ name: 'دارای پوستر', capacity: 2, poster_url: sampleDataUrl });
+  const { tickets: posterTickets } = await store.reserve(1, posterEvent.id, 1, 'order-poster');
+  const posterPage = await (await request('/ticket/' + posterTickets[0].token)).text();
+  assert.ok(posterPage.includes('ticket-view has-poster'));
+  assert.ok(posterPage.includes('ticket-poster-pane'));
+  assert.ok(posterPage.includes(`src="/api/events/${posterEvent.id}/poster"`));
+
+  const posterRes = await request(`/api/events/${posterEvent.id}/poster`);
+  assert.equal(posterRes.status, 200);
+  assert.equal(posterRes.headers.get('Content-Type'), 'image/png');
+  const buffer = await posterRes.arrayBuffer();
+  assert.ok(buffer.byteLength > 0);
+
+  const urlEvent = await store.saveEvent({ name: 'لینک پوستر', capacity: 2, poster_url: 'https://example.test/poster.jpg' });
+  const urlRes = await request(`/api/events/${urlEvent.id}/poster`);
+  assert.equal(urlRes.status, 302);
+  assert.equal(urlRes.headers.get('Location'), 'https://example.test/poster.jpg');
+
+  db.close();
+});

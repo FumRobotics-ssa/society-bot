@@ -63,10 +63,26 @@
             <div class="jalali-field"><label for="event-start-time">ساعت شروع</label><div class="jalali-input-row"><input id="event-start-time" name="starts_at_time" type="text" dir="ltr" inputmode="none" readonly required placeholder="ساعت را انتخاب کنید" aria-haspopup="dialog" aria-controls="time-dialog"><button id="time-open" class="button secondary" type="button">انتخاب ساعت</button></div></div>
             <label>ظرفیت<input name="capacity" type="number" min="1" max="100000" required></label>
             <label>حداکثر بلیت هر نفر<input name="max_per_user" type="number" min="1" max="100" value="1" required></label>
-            <label>مدل قیمت‌گذاری<select name="pricing_mode" id="event-pricing-mode"><option value="fixed">قیمت یکسان برای همه</option><option value="differentiated">قیمت متفاوت برای دانشجوی فردوسی و عموم</option></select></label>
-            <div id="fixed-price-fields" class="event-price-options full"><label class="check"><input name="is_paid" type="checkbox">رویداد دارای هزینه است</label><label>قیمت هر بلیت به تومان<input name="price" type="number" min="0" step="1" value="0" required></label></div>
+            <label class="full">مدل قیمت‌گذاری<select name="pricing_mode" id="event-pricing-mode"><option value="fixed">قیمت یکسان برای همه</option><option value="differentiated">قیمت متفاوت برای دانشجوی فردوسی و عموم</option></select></label>
+            <div id="fixed-price-fields" class="event-price-options full"><label>قیمت هر بلیت به تومان<input name="price" type="number" min="0" step="1" value="0" required></label></div>
             <div id="differentiated-price-fields" class="event-price-options full" hidden><label>قیمت هر بلیت برای عموم<input name="public_price" type="number" min="0" step="1" value="0" required></label><label>قیمت هر بلیت برای دانشجوی فردوسی<input name="fum_student_price" type="number" min="0" step="1" value="0" required></label><small class="full">وضعیت دانشجویی از اطلاعات خوداظهاری حساب خوانده می‌شود؛ صحت آن از دانشگاه استعلام نمی‌شود. صفر برای هر تعرفه مجاز است.</small></div>
-            <div class="event-options full"><label class="check"><input name="active" type="checkbox" checked>رویداد فعال باشد</label></div>
+            <div class="event-checkboxes full">
+              <label class="check" id="is-paid-label"><input name="is_paid" type="checkbox">رویداد دارای هزینه است</label>
+              <label class="check"><input name="active" type="checkbox" checked>رویداد فعال و رزرو باز باشد</label>
+            </div>
+            <div class="event-poster-field full">
+              <label for="event-poster-file">پوستر رویداد</label>
+              <input type="hidden" name="poster_url" id="event-poster-url">
+              <div class="poster-input-row">
+                <input type="file" id="event-poster-file" accept="image/png,image/jpeg,image/webp">
+                <input type="url" id="event-poster-url-input" dir="ltr" placeholder="یا لینک تصویر (https://...) را وارد کنید">
+              </div>
+              <div id="poster-preview-wrap" class="poster-preview-wrap" hidden>
+                <img id="event-poster-preview" class="event-poster-preview" alt="پیش‌نمایش پوستر">
+                <button type="button" id="event-poster-remove" class="button secondary small">حذف پوستر</button>
+              </div>
+              <small>تصویر پوستر را انتخاب کنید یا لینک مستقیم تصویر را وارد کنید (اختیاری)</small>
+            </div>
             <label class="full">توضیحات<textarea name="description" rows="3" maxlength="3000"></textarea></label>
             <label class="full">راهنمای پرداخت دستی<textarea name="payment_instructions" rows="3" maxlength="1500" placeholder="شماره کارت و نام صاحب حساب و توضیحات ارسال رسید"></textarea></label>
           </div><div class="form-actions"><button class="button" type="submit">ذخیره رویداد</button></div>

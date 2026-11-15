@@ -262,7 +262,17 @@ function eventCard(event, editable) {
     ? `عموم ${number(event.price)} تومان · فردوسی ${number(event.fum_student_price)} تومان`
     : yes(event.is_paid) && Number(event.price) > 0 ? number(event.price) + ' تومان' : 'رایگان';
   top.append(el('span', prices, 'muted'), el('span', yes(event.active) ? 'رزرو فعال' : 'رزرو غیرفعال', 'badge' + (yes(event.active) ? '' : ' muted')));
-  card.append(top, el('h3', event.name), el('p', event.description || 'توضیحی برای این رویداد ثبت نشده', 'description'));
+  card.append(top);
+  if (event.poster_url) {
+    const posterImg = el('img', null, 'event-card-poster-thumb');
+    posterImg.src = event.poster_url.startsWith('data:') || /^https?:\/\//i.test(event.poster_url)
+      ? event.poster_url
+      : `/api/events/${event.id}/poster`;
+    posterImg.alt = `پوستر ${event.name}`;
+    posterImg.loading = 'lazy';
+    card.append(posterImg);
+  }
+  card.append(el('h3', event.name), el('p', event.description || 'توضیحی برای این رویداد ثبت نشده', 'description'));
   const meta = el('div', null, 'event-meta');
   const place = state.places.find((place) => String(place.id) === String(event.place_id));
   [['زمان شروع', date(event.starts_at)], ['مکان', place?.name || event.place_name || 'تعیین نشده'], ['ظرفیت', number(event.capacity) + ' نفر'], ['سقف هر نفر', number(event.max_per_user) + ' بلیت']].forEach(([label, value]) => { const cell = el('div', label); cell.append(el('strong', value)); meta.append(cell); });
@@ -296,6 +306,19 @@ function editEvent(event = null) {
   form.elements.namedItem('fum_student_price').value = event?.fum_student_price ?? 0;
   form.elements.namedItem('active').checked = event ? yes(event.active) : true;
   form.elements.namedItem('is_paid').checked = yes(event?.is_paid);
+  const posterUrl = event?.poster_url || '';
+  $('event-poster-url').value = posterUrl;
+  $('event-poster-url-input').value = /^https?:\/\//i.test(posterUrl) ? posterUrl : '';
+  $('event-poster-file').value = '';
+  if (posterUrl) {
+    $('event-poster-preview').src = posterUrl.startsWith('data:') || /^https?:\/\//i.test(posterUrl)
+      ? posterUrl
+      : `/api/events/${event.id}/poster`;
+    $('poster-preview-wrap').hidden = false;
+  } else {
+    $('poster-preview-wrap').hidden = true;
+    $('event-poster-preview').src = '';
+  }
   updateEventPricingFields();
   const when = event?.starts_at ? tehranDateTime(event.starts_at) : null;
   $('event-jalali-date').value = when ? formatJalaliDate(when) : '';
@@ -306,6 +329,7 @@ function updateEventPricingFields() {
   const differentiated = $('event-pricing-mode').value === 'differentiated';
   $('fixed-price-fields').hidden = differentiated;
   $('differentiated-price-fields').hidden = !differentiated;
+  $('is-paid-label').hidden = differentiated;
   $('fixed-price-fields').querySelectorAll('input').forEach((input) => { input.disabled = differentiated; });
   $('differentiated-price-fields').querySelectorAll('input').forEach((input) => { input.disabled = !differentiated; });
 }
@@ -507,12 +531,60 @@ $('event-form').addEventListener('submit', (event) => {
     const publicPrice = pricingMode === 'differentiated' ? Number(values.get('public_price')) : fixedPaid ? Number(values.get('price')) : 0;
     const studentPrice = pricingMode === 'differentiated' ? Number(values.get('fum_student_price')) : 0;
     const isPaid = pricingMode === 'differentiated' ? publicPrice > 0 || studentPrice > 0 : fixedPaid;
-    const body = { name: values.get('name').trim(), description: values.get('description').trim(), place_id: values.get('place_id') ? Number(values.get('place_id')) : null, capacity: Number(values.get('capacity')), max_per_user: Number(values.get('max_per_user')), price: publicPrice, fum_student_price: studentPrice, pricing_mode: pricingMode, payment_instructions: values.get('payment_instructions').trim(), starts_at: startsAt, is_paid: isPaid, active: values.has('active') };
+    const posterUrl = values.get('poster_url') || '';
+    const body = { name: values.get('name').trim(), description: values.get('description').trim(), place_id: values.get('place_id') ? Number(values.get('place_id')) : null, capacity: Number(values.get('capacity')), max_per_user: Number(values.get('max_per_user')), price: publicPrice, fum_student_price: studentPrice, pricing_mode: pricingMode, poster_url: posterUrl, payment_instructions: values.get('payment_instructions').trim(), starts_at: startsAt, is_paid: isPaid, active: values.has('active') };
     await api('/api/events' + (id ? '/' + encodeURIComponent(id) : ''), { method: id ? 'PATCH' : 'POST', body });
     form.hidden = true; await load(); toast('رویداد ذخیره شد');
   });
 });
 $('event-pricing-mode').addEventListener('change', updateEventPricingFields);
+$('event-poster-file').addEventListener('change', () => {
+  const file = $('event-poster-file').files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const img = new Image();
+    img.onload = () => {
+      const maxDim = 1200;
+      let w = img.width, h = img.height;
+      if (w > maxDim || h > maxDim) {
+        if (w > h) { h = Math.round((h * maxDim) / w); w = maxDim; }
+        else { w = Math.round((w * maxDim) / h); h = maxDim; }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      $('event-poster-url').value = dataUrl;
+      $('event-poster-url-input').value = '';
+      $('event-poster-preview').src = dataUrl;
+      $('poster-preview-wrap').hidden = false;
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+});
+$('event-poster-url-input').addEventListener('input', () => {
+  const val = $('event-poster-url-input').value.trim();
+  if (val) {
+    $('event-poster-url').value = val;
+    $('event-poster-file').value = '';
+    $('event-poster-preview').src = val;
+    $('poster-preview-wrap').hidden = false;
+  } else if (!$('event-poster-file').files?.length) {
+    $('event-poster-url').value = '';
+    $('poster-preview-wrap').hidden = true;
+    $('event-poster-preview').src = '';
+  }
+});
+$('event-poster-remove').addEventListener('click', () => {
+  $('event-poster-url').value = '';
+  $('event-poster-url-input').value = '';
+  $('event-poster-file').value = '';
+  $('poster-preview-wrap').hidden = true;
+  $('event-poster-preview').src = '';
+});
 $('place-form').addEventListener('submit', (event) => {
   event.preventDefault(); const form = event.currentTarget; const data = new FormData(form);
   action(event.submitter, async () => { const id = data.get('id'); await api('/api/places' + (id ? '/' + encodeURIComponent(id) : ''), { method: id ? 'PATCH' : 'POST', body: { name: data.get('name').trim(), address: data.get('address').trim(), map_url: data.get('map_url').trim(), capacity: Number(data.get('capacity')) } }); form.reset(); form.elements.namedItem('id').value = ''; $('place-form-title').textContent = 'افزودن مکان'; await load(); toast('مکان ذخیره شد'); });
