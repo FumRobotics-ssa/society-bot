@@ -58,6 +58,93 @@ test('per user limit is checked across concurrent separate orders', async t => {
   assert.equal(results.find(r => r.status === 'rejected').reason.code, 'USER_LIMIT');
 });
 
+test('legacy and fixed-price events keep one tariff for everyone and snapshot it on orders', async t => {
+  const { store, event } = await fixture(t, { paid: true });
+  await store.upsertUser({ id: 1, profile: { is_fum_student: true, student_number: '0001234567' } });
+  const quote = await store.quoteOrder(1, event.id, 2);
+  assert.deepEqual(quote, { event_id: event.id, quantity: 2, pricing_group: 'fixed', unit_price: 250000, total_price: 500000 });
+  const { order } = await store.reserve(1, event.id, 1, 'fixed-order');
+  assert.equal(order.unit_price, 250000);
+  assert.equal(order.pricing_group, 'fixed');
+  await store.saveEvent({ price: 900000 }, event.id);
+  await store.upsertUser({ id: 1, profile: { is_fum_student: false } });
+  const saved = await store.getOrder(order.id);
+  assert.equal(saved.unit_price, 250000);
+  assert.equal(saved.pricing_group, 'fixed');
+});
+
+test('differentiated pricing is computed from stored self-reported profile, not caller selection', async t => {
+  const { store } = await fixture(t, { capacity: 8, max: 4 });
+  const event = await store.saveEvent({ name: 'تعرفه متفاوت', capacity: 8, max_per_user: 4,
+    pricing_mode: 'differentiated', price: 180000, fum_student_price: 70000 });
+  await store.upsertUser({ id: 1, profile: { is_fum_student: true, student_number: '۰۰۱۲۳۴۵۶۷۸' } });
+  await store.upsertUser({ id: 2, profile: { is_fum_student: false, is_student: true, university_name: 'دانشگاه دیگر' } });
+  assert.equal(event.is_paid, 1);
+  assert.equal(event.pricing_mode, 'differentiated');
+  assert.deepEqual(await store.quoteOrder(1, event.id, 2), {
+    event_id: event.id, quantity: 2, pricing_group: 'fum_student', unit_price: 70000, total_price: 140000,
+  });
+  assert.deepEqual(await store.quoteOrder(2, event.id, 1), {
+    event_id: event.id, quantity: 1, pricing_group: 'general', unit_price: 180000, total_price: 180000,
+  });
+  await assert.rejects(store.reserve(1, event.id, 1, 'forged-tariff', { quantity: 1, pricing_group: 'general', unit_price: 0 }), { code: 'PRICE_CHANGED' });
+  const studentOrder = await store.reserve(1, event.id, 2, 'student-order');
+  const generalOrder = await store.reserve(2, event.id, 1, 'general-order');
+  assert.equal(studentOrder.order.pricing_group, 'fum_student');
+  assert.equal(studentOrder.order.unit_price, 70000);
+  assert.equal(generalOrder.order.pricing_group, 'general');
+  assert.equal(generalOrder.order.unit_price, 180000);
+  await store.saveEvent({ price: 300000, fum_student_price: 250000 }, event.id);
+  await store.upsertUser({ id: 1, profile: { is_fum_student: false } });
+  assert.equal((await store.getOrder(studentOrder.order.id)).unit_price, 70000);
+  assert.equal((await store.getOrder(studentOrder.order.id)).pricing_group, 'fum_student');
+});
+
+test('incomplete FUM profiles cannot use the student tariff until a 10-digit string is saved', async t => {
+  const { store } = await fixture(t);
+  const event = await store.saveEvent({ name: 'دانشجویی', capacity: 4, pricing_mode: 'differentiated', price: 100000, fum_student_price: 50000 });
+  await store.upsertUser({ id: 1, profile: { is_fum_student: true, fum_faculty: 'مهندسی' } });
+  await assert.rejects(store.quoteOrder(1, event.id, 1), { code: 'STUDENT_PROFILE_INCOMPLETE' });
+  await store.upsertUser({ id: 1, profile: { student_number: '۰۰۰۱۲۳۴۵۶' } });
+  await assert.rejects(store.quoteOrder(1, event.id, 1), { code: 'STUDENT_PROFILE_INCOMPLETE' });
+  await store.upsertUser({ id: 1, profile: { student_number: '۰۰۰۱۲۳۴۵۶۷۸۹' } });
+  await assert.rejects(store.quoteOrder(1, event.id, 1), { code: 'STUDENT_PROFILE_INCOMPLETE' });
+  await store.upsertUser({ id: 1, profile: { student_number: '٠٠١٢٣٤٥٦٧٨' } });
+  const user = await store.getUser(1);
+  assert.equal(user.profile.student_number, '0012345678');
+  assert.equal((await store.quoteOrder(1, event.id, 1)).pricing_group, 'fum_student');
+});
+
+test('confirmed quote is rejected if event or saved user tariff changes before reservation', async t => {
+  const { store } = await fixture(t);
+  const event = await store.saveEvent({ name: 'تغییر تعرفه', capacity: 4, max_per_user: 3,
+    pricing_mode: 'differentiated', price: 80000, fum_student_price: 50000 });
+  await store.upsertUser({ id: 1, profile: { is_fum_student: true, student_number: '0000123456' } });
+  const oldQuote = await store.quoteOrder(1, event.id, 2);
+  await store.saveEvent({ price: 90000, fum_student_price: 60000 }, event.id);
+  await assert.rejects(store.reserve(1, event.id, 2, 'stale-price', oldQuote), { code: 'PRICE_CHANGED' });
+  await store.saveEvent({ price: 80000, fum_student_price: 50000 }, event.id);
+  await store.upsertUser({ id: 1, profile: { is_fum_student: false } });
+  await assert.rejects(store.reserve(1, event.id, 2, 'stale-profile', oldQuote), { code: 'PRICE_CHANGED' });
+  assert.equal((await store.listOrders()).length, 0);
+});
+
+test('zero student tariff issues a free order while public tariff remains paid', async t => {
+  const { store } = await fixture(t, { capacity: 3, max: 2 });
+  const event = await store.saveEvent({ name: 'تعرفه رایگان دانشجو', capacity: 3, max_per_user: 2,
+    pricing_mode: 'differentiated', price: 45000, fum_student_price: 0 });
+  await store.upsertUser({ id: 1, profile: { is_fum_student: true, student_number: '0000123456' } });
+  const student = await store.reserve(1, event.id, 2, 'free-student');
+  const publicOrder = await store.reserve(2, event.id, 1, 'paid-public');
+  assert.equal(student.order.status, 'approved');
+  assert.equal(student.order.pricing_group, 'fum_student');
+  assert.equal(student.order.unit_price, 0);
+  assert.equal(student.tickets.length, 2);
+  assert.equal(publicOrder.order.status, 'reserved');
+  assert.equal(publicOrder.order.pricing_group, 'general');
+  assert.equal(publicOrder.order.unit_price, 45000);
+});
+
 test('failure while creating tickets rolls back the order and its reserved stock', async t => {
   const { store, event, db } = await fixture(t);
   db.exec("CREATE TRIGGER simulate_ticket_failure BEFORE INSERT ON tickets BEGIN SELECT RAISE(ABORT,'test_failure'); END;");

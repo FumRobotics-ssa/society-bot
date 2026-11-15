@@ -21,8 +21,8 @@ spec.loader.exec_module(legacy)
 BASE_FIELDS = {
     "users": "id username first_name last_name phone profile_json is_deleted created_at updated_at",
     "places": "id name address capacity created_at map_url",
-    "events": "id name description place_id capacity max_per_user is_paid price payment_instructions starts_at active archived created_at updated_at",
-    "orders": "id request_key user_id event_id quantity unit_price status expires_at receipt_file_id receipt_type receipt_key reviewed_by reviewed_at created_at updated_at",
+    "events": "id name description place_id capacity max_per_user is_paid price pricing_mode fum_student_price payment_instructions starts_at active archived created_at updated_at",
+    "orders": "id request_key user_id event_id quantity unit_price pricing_group status expires_at receipt_file_id receipt_type receipt_key reviewed_by reviewed_at created_at updated_at",
     "tickets": "id token checkin_code legacy_code order_id checked_in_at checked_in_by created_at",
     "admins": "user_id role created_at",
     "audit_log": "id actor_id action target details_json created_at",
@@ -33,6 +33,8 @@ LEGACY_AUDIENCE_FIELDS = {
 }
 FIELDS = {**BASE_FIELDS, **LEGACY_AUDIENCE_FIELDS}
 OLD_TICKET_FIELDS = set(BASE_FIELDS["tickets"].split()) - {"checkin_code"}
+OLD_EVENT_FIELDS = set(BASE_FIELDS["events"].split()) - {"pricing_mode", "fum_student_price"}
+OLD_ORDER_FIELDS = set(BASE_FIELDS["orders"].split()) - {"pricing_group"}
 
 
 def new_checkin_code(used):
@@ -66,6 +68,10 @@ def validate_snapshot(snapshot, include_admins=False):
         for row in rows:
             if table == "places" and isinstance(row, dict) and "map_url" not in row:
                 row = {**row, "map_url": ""}  # Accept backups made before the map-link migration.
+            if table == "events" and isinstance(row, dict) and set(row) == OLD_EVENT_FIELDS:
+                row = {**row, "pricing_mode": "fixed", "fum_student_price": 0}
+            if table == "orders" and isinstance(row, dict) and set(row) == OLD_ORDER_FIELDS:
+                row = {**row, "pricing_group": "fixed"}
             if table == "tickets" and isinstance(row, dict) and set(row) == OLD_TICKET_FIELDS:
                 row = {**row, "checkin_code": new_checkin_code(reserved_checkin_codes | checkin_codes)}
             elif table == "tickets" and isinstance(row, dict) and set(row) == set(BASE_FIELDS["tickets"].split()):
@@ -98,6 +104,7 @@ def validate_snapshot(snapshot, include_admins=False):
         check.executescript((ROOT / "migrations" / "0003_legacy_event_audience.sql").read_text(encoding="utf8"))
         check.executescript((ROOT / "migrations" / "0004_ticket_checkin_code.sql").read_text(encoding="utf8"))
         check.executescript((ROOT / "migrations" / "0005_randomize_ticket_checkin_codes.sql").read_text(encoding="utf8"))
+        check.executescript((ROOT / "migrations" / "0006_differentiated_event_pricing.sql").read_text(encoding="utf8"))
         check.executescript(text)
         if check.execute("PRAGMA foreign_key_check").fetchone():
             raise ValueError("Snapshot contains broken foreign keys")
