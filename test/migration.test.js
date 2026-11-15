@@ -48,6 +48,27 @@ test('random-code migration replaces sequential values while preserving ticket l
   db.close();
 });
 
+test('differentiated pricing migration preserves old events and orders at their existing fixed price', () => {
+  const priorSchema = readdirSync(new URL('../migrations/', import.meta.url))
+    .filter(name => name.endsWith('.sql') && name < '0006_differentiated_event_pricing.sql')
+    .sort().map(name => readFileSync(new URL('../migrations/' + name, import.meta.url), 'utf8')).join('\n');
+  const db = createDatabase(); db.exec(priorSchema);
+  db.exec(`INSERT INTO users(id,first_name,phone) VALUES(1,'علی','09123456789');
+    INSERT INTO events(name,capacity,max_per_user,is_paid,price) VALUES('رویداد قدیمی',3,2,1,125000);
+    INSERT INTO orders(id,request_key,user_id,event_id,quantity,unit_price,status) VALUES('old-order','old-key',1,1,1,125000,'approved');`);
+  db.exec(readFileSync(new URL('../migrations/0006_differentiated_event_pricing.sql', import.meta.url), 'utf8'));
+  const migratedEvent = db.native.prepare('SELECT pricing_mode,fum_student_price,is_paid,price FROM events WHERE id=1').get();
+  assert.equal(migratedEvent.pricing_mode, 'fixed');
+  assert.equal(migratedEvent.fum_student_price, 0);
+  assert.equal(migratedEvent.is_paid, 1);
+  assert.equal(migratedEvent.price, 125000);
+  const migratedOrder = db.native.prepare('SELECT pricing_group,unit_price,status FROM orders WHERE id=?').get('old-order');
+  assert.equal(migratedOrder.pricing_group, 'fixed');
+  assert.equal(migratedOrder.unit_price, 125000);
+  assert.equal(migratedOrder.status, 'approved');
+  db.close();
+});
+
 test('JSON backup restore preserves ticket token and excludes sessions and admin rights by default', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'robotics-restore-')); const source = join(dir, 'backup.json'), output = join(dir, 'restore.sql');
   const db = createDatabase(); db.exec(schema); const store = new Store(db);
@@ -62,6 +83,17 @@ test('JSON backup restore preserves ticket token and excludes sessions and admin
   assert.equal(target.native.prepare('SELECT token FROM tickets').get().token, order.tickets[0].token);
   assert.match(target.native.prepare('SELECT checkin_code FROM tickets').get().checkin_code, /^[1-9][0-9]{7}$/);
   assert.equal(target.native.prepare('SELECT COUNT(*) AS n FROM admins').get().n, 0);
+  const oldSnapshot = JSON.parse(snapshot);
+  delete oldSnapshot.tables.events[0].pricing_mode;
+  delete oldSnapshot.tables.events[0].fum_student_price;
+  delete oldSnapshot.tables.orders[0].pricing_group;
+  const oldSource = join(dir, 'pre-pricing-backup.json'), oldOutput = join(dir, 'pre-pricing-restore.sql');
+  writeFileSync(oldSource, JSON.stringify(oldSnapshot));
+  const oldRestore = spawnSync('python', [fileURLToPath(new URL('../scripts/restore-backup.py', import.meta.url)), oldSource, oldOutput], { encoding: 'utf8' });
+  assert.equal(oldRestore.status, 0, oldRestore.stderr);
+  const oldTarget = createDatabase(); oldTarget.exec(schema); oldTarget.exec(readFileSync(oldOutput, 'utf8'));
+  assert.equal(oldTarget.native.prepare('SELECT pricing_mode FROM events').get().pricing_mode, 'fixed');
+  assert.equal(oldTarget.native.prepare('SELECT pricing_group FROM orders').get().pricing_group, 'fixed');
   const legacySource = join(dir, 'legacy.json'), legacyOutput = join(dir, 'legacy.sql');
   const legacySnapshot = JSON.parse(snapshot);
   legacySnapshot.format = 'siahe-json';
@@ -72,7 +104,7 @@ test('JSON backup restore preserves ticket token and excludes sessions and admin
   const legacyTarget = createDatabase(); legacyTarget.exec(schema); legacyTarget.exec(readFileSync(legacyOutput, 'utf8'));
   assert.equal(legacyTarget.native.prepare('SELECT token FROM tickets').get().token, order.tickets[0].token);
   assert.match(legacyTarget.native.prepare('SELECT checkin_code FROM tickets').get().checkin_code, /^[1-9][0-9]{7}$/);
-  db.close(); target.close(); legacyTarget.close(); rmSync(dir, { recursive: true });
+  db.close(); target.close(); oldTarget.close(); legacyTarget.close(); rmSync(dir, { recursive: true });
 });
 test('daily backup filename has only project name and date', async () => {
   const db = createDatabase(); db.exec(schema);

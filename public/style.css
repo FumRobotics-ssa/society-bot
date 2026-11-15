@@ -195,3 +195,4 @@ select{
 .time-selects{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
 .time-selects label{gap:4px;font-size:11px}
 .time-selects select{height:42px;padding:8px;text-align:center}
+.event-price-options{display:grid;grid-template-columns:1fr 1fr;gap:14px 20px;align-items:end}.event-price-options .full{grid-column:1/-1}@media(max-width:700px){.event-price-options{grid-template-columns:1fr}.event-price-options .full{grid-column:auto}}

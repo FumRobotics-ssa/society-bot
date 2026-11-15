@@ -1,3 +1,5 @@
+import { configuredStudentNumberLength, normalizeDigits, resolveEventPricing } from './pricing.js';
+
 const OCCUPIED = "(status='approved' OR (status IN ('reserved','pending') AND expires_at>unixepoch()))";
 const TEST_EVENT_NAME = /(?:^|[^\p{L}\p{N}])(?:test(?:ing)?|demo|sample|تست(?:ی)?|آزمایش(?:ی)?|نمونه(?:ی)?)(?=$|[^\p{L}\p{N}])/iu;
 const ERRORS = {
@@ -5,6 +7,8 @@ const ERRORS = {
   USER_LIMIT: 'تعداد بلیت از سقف مجاز هر نفر بیشتر است',
   CAPACITY_BELOW_RESERVED: 'ظرفیت نمیتواند از تعداد بلیتهای رزرو شده کمتر باشد',
   USER_LIMIT_BELOW_RESERVED: 'سقف هر نفر نمیتواند از خریدهای قبلی کمتر باشد',
+  STUDENT_PROFILE_INCOMPLETE: 'برای محاسبه تعرفه دانشجویی، شماره دانشجویی را در اطلاعات حساب تکمیل کنید',
+  PRICE_CHANGED: 'تعرفه این رویداد از زمان نمایش خلاصه سفارش تغییر کرده است؛ مبلغ جدید را بررسی کنید',
 };
 
 export function domainError(code, message) {
@@ -12,10 +16,6 @@ export function domainError(code, message) {
 }
 const parse = (value) => { try { return JSON.parse(value || '{}'); } catch { return {}; } };
 const userRow = (row) => row ? { ...row, profile: parse(row.profile_json) } : null;
-const normalizeDigits = (value) => String(value).replace(/[۰-۹٠-٩]/g, digit => {
-  const persian = '۰۱۲۳۴۵۶۷۸۹'.indexOf(digit);
-  return String(persian >= 0 ? persian : '٠١٢٣٤٥٦٧٨٩'.indexOf(digit));
-});
 function randomCheckinCode() {
   const value = new Uint32Array(1);
   const range = 90_000_000;
@@ -80,6 +80,7 @@ export class Store {
     const old = await this.getUser(id);
     const merged = { ...(old || {}), ...data };
     const profile = { ...(old?.profile || {}), ...(data.profile || {}) };
+    if (profile.student_number != null) profile.student_number = String(normalizeDigits(profile.student_number)).trim();
     const json = JSON.stringify(profile);
     if (json.length > 20000) throw domainError('INVALID_INPUT', 'اطلاعات حساب بیش از حد طولانی است');
     await this.run(`INSERT INTO users(id,username,first_name,last_name,phone,profile_json) VALUES(?,?,?,?,?,?)
@@ -216,19 +217,29 @@ export class Store {
     const place = placeId ? await this.one('SELECT * FROM places WHERE id=?', placeId) : null;
     if (placeId && !place) throw domainError('NOT_FOUND', 'مکان پیدا نشد');
     const capacity = int(v.capacity ?? place?.capacity, 'ظرفیت', 1000000);
-    const paid = flag(v.is_paid);
-    const price = Number(v.price || 0);
-    if (!Number.isSafeInteger(price) || price < 0 || price > 1000000000000) throw domainError('INVALID_INPUT', 'مبلغ معتبر نیست');
+    const pricingMode = String(v.pricing_mode || 'fixed');
+    if (!['fixed', 'differentiated'].includes(pricingMode)) throw domainError('INVALID_INPUT', 'مدل قیمت‌گذاری معتبر نیست');
+    const checkedPrice = value => {
+      const amount = Number(value || 0);
+      if (!Number.isSafeInteger(amount) || amount < 0 || amount > 1000000000000) throw domainError('INVALID_INPUT', 'مبلغ معتبر نیست');
+      return amount;
+    };
+    const submittedPrice = checkedPrice(v.price);
+    const fumStudentPrice = pricingMode === 'differentiated' ? checkedPrice(v.fum_student_price) : 0;
+    const paid = pricingMode === 'differentiated'
+      ? Number(submittedPrice > 0 || fumStudentPrice > 0)
+      : flag(v.is_paid);
+    const price = pricingMode === 'differentiated' ? submittedPrice : paid ? submittedPrice : 0;
     const startsAt = string(v.starts_at, 'زمان رویداد', 100);
     if (startsAt && !Number.isFinite(Date.parse(startsAt))) throw domainError('INVALID_INPUT', 'زمان رویداد معتبر نیست');
     const values = [string(v.name, 'نام رویداد', 200, true), string(v.description, 'توضیحات', 3500), placeId, capacity,
-      int(v.max_per_user, 'سقف هر نفر', 100), paid, paid ? price : 0,
+      int(v.max_per_user, 'سقف هر نفر', 100), paid, price, pricingMode, fumStudentPrice,
       string(v.payment_instructions, 'دستور پرداخت', 1500), startsAt, flag(v.active)];
     if (id) await this.run(`UPDATE events SET name=?,description=?,place_id=?,capacity=?,max_per_user=?,is_paid=?,price=?,
-      payment_instructions=?,starts_at=?,active=?,updated_at=unixepoch() WHERE id=?`, ...values, Number(id));
+      pricing_mode=?,fum_student_price=?,payment_instructions=?,starts_at=?,active=?,updated_at=unixepoch() WHERE id=?`, ...values, Number(id));
     else {
-      const r = await this.run(`INSERT INTO events(name,description,place_id,capacity,max_per_user,is_paid,price,payment_instructions,starts_at,active)
-        VALUES(?,?,?,?,?,?,?,?,?,?)`, ...values);
+      const r = await this.run(`INSERT INTO events(name,description,place_id,capacity,max_per_user,is_paid,price,pricing_mode,fum_student_price,payment_instructions,starts_at,active)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, ...values);
       id = r.meta.last_row_id;
     }
     return this.getEvent(id);
@@ -244,27 +255,62 @@ export class Store {
       u.first_name,u.last_name,u.phone,u.username FROM orders o JOIN events e ON e.id=o.event_id
       JOIN users u ON u.id=o.user_id LEFT JOIN places p ON p.id=e.place_id`;
   }
-  async reserve(userId, eventId, quantity, key) {
+  async getEventPricing(userId, eventId, exactStudentNumberLength = null) {
+    userId = int(userId, 'شناسه کاربر'); eventId = int(eventId, 'شناسه رویداد');
+    const [user, event] = await Promise.all([this.getUser(userId), this.getEvent(eventId)]);
+    if (!user) throw domainError('ACCOUNT_REQUIRED', 'ابتدا حساب کاربری بسازید');
+    if (!event || !event.active || event.archived) throw domainError('EVENT_INACTIVE', 'این رویداد موجود نیست یا ثبت‌نام آن متوقف شده است');
+    return { event, ...resolveEventPricing(event, user.profile, configuredStudentNumberLength(exactStudentNumberLength)) };
+  }
+  async quoteOrder(userId, eventId, quantity, exactStudentNumberLength = null) {
+    quantity = int(quantity, 'تعداد بلیت', 100);
+    const pricing = await this.getEventPricing(userId, eventId, exactStudentNumberLength);
+    if (pricing.requires_student_number) throw domainError('STUDENT_PROFILE_INCOMPLETE');
+    const total_price = pricing.unit_price * quantity;
+    if (!Number.isSafeInteger(total_price)) throw domainError('INVALID_INPUT', 'مبلغ کل معتبر نیست');
+    return { event_id: pricing.event.id, quantity, pricing_group: pricing.pricing_group, unit_price: pricing.unit_price, total_price };
+  }
+  async reserve(userId, eventId, quantity, key, expectedQuote = null, exactStudentNumberLength = null) {
     userId = int(userId, 'شناسه کاربر'); eventId = int(eventId, 'شناسه رویداد'); quantity = int(quantity, 'تعداد بلیت', 100);
     key = string(key, 'شناسه درخواست', 200, true);
     const existing = await this.one('SELECT id,user_id,event_id,quantity FROM orders WHERE request_key=?', key);
     if (existing) return this.existingReservation(existing, userId, eventId, quantity);
+    const quote = await this.quoteOrder(userId, eventId, quantity, exactStudentNumberLength);
+    if (expectedQuote && (expectedQuote.pricing_group !== quote.pricing_group || Number(expectedQuote.unit_price) !== quote.unit_price || Number(expectedQuote.quantity) !== quantity)) {
+      throw domainError('PRICE_CHANGED');
+    }
     const id = crypto.randomUUID();
+    const fumFlag = "COALESCE(json_extract(u.profile_json,'$.is_fum_student'),0) IN (1,'1','true')";
+    const studentNumber = "CAST(json_extract(u.profile_json,'$.student_number') AS TEXT)";
+    let pricingGuard;
+    let pricingValues;
+    if (quote.pricing_group === 'fixed') {
+      pricingGuard = "e.pricing_mode='fixed' AND (CASE WHEN e.is_paid=1 THEN e.price ELSE 0 END)=?";
+      pricingValues = [quote.unit_price];
+    } else if (quote.pricing_group === 'general') {
+      pricingGuard = `e.pricing_mode='differentiated' AND e.price=? AND NOT (${fumFlag})`;
+      pricingValues = [quote.unit_price];
+    } else {
+      pricingGuard = `e.pricing_mode='differentiated' AND e.fum_student_price=? AND (${fumFlag})
+        AND length(${studentNumber})=? AND ${studentNumber} NOT GLOB '*[^0-9۰-۹٠-٩]*'`;
+      pricingValues = [quote.unit_price, configuredStudentNumberLength(exactStudentNumberLength)];
+    }
     let tickets;
     for (let attempt = 0; attempt < 5; attempt++) {
       tickets = ticketBatch(quantity);
       try {
-        await this.db.batch([
-          this.stmt(`INSERT INTO orders(id,request_key,user_id,event_id,quantity,unit_price,status,expires_at)
-            SELECT ?,?,u.id,e.id,?,CASE WHEN e.is_paid=1 AND e.price>0 THEN e.price ELSE 0 END,
-            CASE WHEN e.is_paid=1 AND e.price>0 THEN 'reserved' ELSE 'approved' END,
-            CASE WHEN e.is_paid=1 AND e.price>0 THEN unixepoch()+900 ELSE NULL END
-            FROM events e,users u WHERE e.id=? AND u.id=? AND e.active=1 AND e.archived=0 AND u.is_deleted=0`,
-            id, key, quantity, eventId, userId),
+        const results = await this.db.batch([
+          this.stmt(`INSERT INTO orders(id,request_key,user_id,event_id,quantity,unit_price,pricing_group,status,expires_at)
+            SELECT ?,?,u.id,e.id,?,?,?,?,CASE WHEN ?>0 THEN unixepoch()+900 ELSE NULL END
+            FROM events e,users u WHERE e.id=? AND u.id=? AND e.active=1 AND e.archived=0 AND u.is_deleted=0 AND ${pricingGuard}`,
+            id, key, quantity, quote.unit_price, quote.pricing_group,
+            quote.unit_price > 0 ? 'reserved' : 'approved', quote.unit_price,
+            eventId, userId, ...pricingValues),
           this.stmt(`INSERT INTO tickets(id,token,checkin_code,order_id)
             SELECT json_extract(value,'$.id'),json_extract(value,'$.token'),json_extract(value,'$.checkin_code'),? FROM json_each(?)
             WHERE EXISTS(SELECT 1 FROM orders WHERE id=?)`, id, JSON.stringify(tickets), id),
         ]);
+        if (Number(results[0]?.meta?.changes) !== 1) throw domainError('PRICE_CHANGED');
         break;
       } catch (e) {
         // A retry racing the original request returns its booking; only short-code collisions are retried.
@@ -336,7 +382,7 @@ export class Store {
     return order;
   }
   ticketSelect() {
-    return `SELECT t.*,o.user_id,o.event_id,o.quantity,o.status AS order_status,o.expires_at,o.unit_price,
+    return `SELECT t.*,o.user_id,o.event_id,o.quantity,o.status AS order_status,o.expires_at,o.unit_price,o.pricing_group,
       CASE WHEN t.checked_in_at IS NOT NULL THEN 'attended' ELSE o.status END AS status,
       e.name AS event_name,e.starts_at,p.name AS place_name,p.address AS place_address,p.map_url AS place_map_url,
       u.first_name,u.last_name,u.phone,u.username

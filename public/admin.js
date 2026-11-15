@@ -258,7 +258,10 @@ function pager(container, key, count) {
 function eventCard(event, editable) {
   const card = el('article', null, 'event-card');
   const top = el('div', null, 'card-top');
-  top.append(el('span', yes(event.is_paid) ? number(event.price) + ' تومان' : 'رایگان', 'muted'), el('span', yes(event.active) ? 'رزرو فعال' : 'رزرو غیرفعال', 'badge' + (yes(event.active) ? '' : ' muted')));
+  const prices = event.pricing_mode === 'differentiated'
+    ? `عموم ${number(event.price)} تومان · فردوسی ${number(event.fum_student_price)} تومان`
+    : yes(event.is_paid) && Number(event.price) > 0 ? number(event.price) + ' تومان' : 'رایگان';
+  top.append(el('span', prices, 'muted'), el('span', yes(event.active) ? 'رزرو فعال' : 'رزرو غیرفعال', 'badge' + (yes(event.active) ? '' : ' muted')));
   card.append(top, el('h3', event.name), el('p', event.description || 'توضیحی برای این رویداد ثبت نشده', 'description'));
   const meta = el('div', null, 'event-meta');
   const place = state.places.find((place) => String(place.id) === String(event.place_id));
@@ -288,12 +291,23 @@ function editEvent(event = null) {
   form.elements.namedItem('id').value = event?.id || '';
   $('event-form-title').textContent = event ? 'ویرایش رویداد' : 'رویداد جدید';
   ['name', 'description', 'place_id', 'capacity', 'max_per_user', 'price', 'payment_instructions'].forEach((key) => { form.elements.namedItem(key).value = event?.[key] ?? (key === 'max_per_user' ? 1 : key === 'price' ? 0 : ''); });
+  form.elements.namedItem('pricing_mode').value = event?.pricing_mode || 'fixed';
+  form.elements.namedItem('public_price').value = event?.price ?? 0;
+  form.elements.namedItem('fum_student_price').value = event?.fum_student_price ?? 0;
   form.elements.namedItem('active').checked = event ? yes(event.active) : true;
   form.elements.namedItem('is_paid').checked = yes(event?.is_paid);
+  updateEventPricingFields();
   const when = event?.starts_at ? tehranDateTime(event.starts_at) : null;
   $('event-jalali-date').value = when ? formatJalaliDate(when) : '';
   form.elements.namedItem('starts_at_time').value = when ? persianNumber(`${String(when.hour).padStart(2, '0')}:${String(when.minute).padStart(2, '0')}`) : '';
   form.hidden = false; form.scrollIntoView({ behavior: 'smooth', block: 'start' }); form.elements.namedItem('name').focus();
+}
+function updateEventPricingFields() {
+  const differentiated = $('event-pricing-mode').value === 'differentiated';
+  $('fixed-price-fields').hidden = differentiated;
+  $('differentiated-price-fields').hidden = !differentiated;
+  $('fixed-price-fields').querySelectorAll('input').forEach((input) => { input.disabled = differentiated; });
+  $('differentiated-price-fields').querySelectorAll('input').forEach((input) => { input.disabled = !differentiated; });
 }
 function showPlaces() {
   table($('places-list'), ['مکان', 'نشانی', 'نشان', 'ظرفیت', 'مدیریت'], state.places.map((place) => {
@@ -306,7 +320,8 @@ function showPlaces() {
 }
 async function showOrders() {
   const data = array(await api(query('/api/orders', { status: $('order-status').value, eventId: $('orders-event').value, limit: 50, offset: state.pages.orders * 50 })), 'orders');
-  table($('orders-list'), ['سفارش', 'شرکت‌کننده', 'رویداد', 'تعداد', 'مبلغ به تومان', 'وضعیت', 'بررسی'], data.map((order) => {
+  const tariff = order => order.pricing_group === 'fum_student' ? 'فردوسی (خوداظهاری)' : order.pricing_group === 'general' ? 'عموم' : 'یکسان برای همه';
+  table($('orders-list'), ['سفارش', 'شرکت‌کننده', 'رویداد', 'تعداد', 'گروه تعرفه', 'مبلغ به تومان', 'وضعیت', 'بررسی'], data.map((order) => {
     const actions = el('div', null, 'actions');
     if (order.receipt_file_id) actions.append(link('مشاهده رسید', '/api/orders/' + encodeURIComponent(order.id) + '/receipt', 'button secondary small', true));
     if (order.status === 'pending') {
@@ -315,7 +330,7 @@ async function showOrders() {
         await api('/api/orders/' + encodeURIComponent(order.id) + '/review', { method: 'POST', body: { approve } }); await load(); toast(approve ? 'پرداخت تأیید شد' : 'پرداخت رد شد');
       }, approve ? 'button small' : 'button danger small')));
     }
-    return [order.id, person(order), eventName(order), number(order.quantity), number(order.total_price ?? order.amount ?? order.total ?? Number(order.quantity) * Number(order.unit_price) ?? 0), badge(order.status), actions];
+    return [order.id, person(order), eventName(order), number(order.quantity), tariff(order), number(Number(order.quantity) * Number(order.unit_price)), badge(order.status), actions];
   }));
   pager($('orders-list'), 'orders', data.length);
 }
@@ -487,11 +502,17 @@ $('event-form').addEventListener('submit', (event) => {
     const id = values.get('id');
     const chosenDate = parseJalaliDate(values.get('starts_at_jalali'));
     const startsAt = jalaliTimeToIso(chosenDate, values.get('starts_at_time'));
-    const body = { name: values.get('name').trim(), description: values.get('description').trim(), place_id: values.get('place_id') ? Number(values.get('place_id')) : null, capacity: Number(values.get('capacity')), max_per_user: Number(values.get('max_per_user')), price: values.has('is_paid') ? Number(values.get('price')) : 0, payment_instructions: values.get('payment_instructions').trim(), starts_at: startsAt, is_paid: values.has('is_paid'), active: values.has('active') };
+    const pricingMode = values.get('pricing_mode') || 'fixed';
+    const fixedPaid = values.has('is_paid');
+    const publicPrice = pricingMode === 'differentiated' ? Number(values.get('public_price')) : fixedPaid ? Number(values.get('price')) : 0;
+    const studentPrice = pricingMode === 'differentiated' ? Number(values.get('fum_student_price')) : 0;
+    const isPaid = pricingMode === 'differentiated' ? publicPrice > 0 || studentPrice > 0 : fixedPaid;
+    const body = { name: values.get('name').trim(), description: values.get('description').trim(), place_id: values.get('place_id') ? Number(values.get('place_id')) : null, capacity: Number(values.get('capacity')), max_per_user: Number(values.get('max_per_user')), price: publicPrice, fum_student_price: studentPrice, pricing_mode: pricingMode, payment_instructions: values.get('payment_instructions').trim(), starts_at: startsAt, is_paid: isPaid, active: values.has('active') };
     await api('/api/events' + (id ? '/' + encodeURIComponent(id) : ''), { method: id ? 'PATCH' : 'POST', body });
     form.hidden = true; await load(); toast('رویداد ذخیره شد');
   });
 });
+$('event-pricing-mode').addEventListener('change', updateEventPricingFields);
 $('place-form').addEventListener('submit', (event) => {
   event.preventDefault(); const form = event.currentTarget; const data = new FormData(form);
   action(event.submitter, async () => { const id = data.get('id'); await api('/api/places' + (id ? '/' + encodeURIComponent(id) : ''), { method: id ? 'PATCH' : 'POST', body: { name: data.get('name').trim(), address: data.get('address').trim(), map_url: data.get('map_url').trim(), capacity: Number(data.get('capacity')) } }); form.reset(); form.elements.namedItem('id').value = ''; $('place-form-title').textContent = 'افزودن مکان'; await load(); toast('مکان ذخیره شد'); });

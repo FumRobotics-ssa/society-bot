@@ -1,5 +1,6 @@
 import { createLoginCode } from './auth.js';
 import { neshanUrl } from './store.js';
+import { configuredStudentNumberLength, isFumStudent, isValidStudentNumber, normalizeStudentNumber, pricingGroupLabel } from './pricing.js';
 
 const FA_DIGITS = '۰۱۲۳۴۵۶۷۸۹';
 const AR_DIGITS = '٠١٢٣٤٥٦٧٨٩';
@@ -17,6 +18,9 @@ function shortTicketCode(value) {
 }
 function ownerIds(env) {
   return String(env.OWNER_IDS || '').split(',').map(x => x.trim()).filter(Boolean);
+}
+function commandGuide(title, entries) {
+  return `${title}\n\n${entries.map(([label, command]) => `${label}: \u2066${command}\u2069`).join('\n')}`;
 }
 async function roleOf(id, env, store) {
   if (ownerIds(env).includes(String(id))) return 'owner';
@@ -63,10 +67,13 @@ function eventTime(value) {
   return new Intl.DateTimeFormat('fa-IR', { timeZone: 'Asia/Tehran', calendar: 'persian', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(date);
 }
 function eventText(event) {
-  return [event.name, event.description || '', `شناسه: ${event.id}`, `مکان: ${event.place_name || 'بدون مکان مشخص'}`, event.address || event.place_address ? `نشانی: ${event.address || event.place_address}` : '', neshanUrl(event.place_map_url) ? `موقعیت در نشان: ${neshanUrl(event.place_map_url)}` : '', `زمان شروع: ${eventTime(event.starts_at)}`, `ظرفیت: ${event.capacity}`, event.remaining != null ? `ظرفیت باقی‌مانده: ${event.remaining}` : '', `سقف بلیت برای هر نفر: ${event.max_per_user}`, event.is_paid ? `قیمت هر بلیت: ${money(event.price)} تومان` : 'قیمت: رایگان', `وضعیت: ${event.active ? 'فعال' : 'غیرفعال'}`].filter(Boolean).join('\n');
+  const prices = event.pricing_mode === 'differentiated'
+    ? `قیمت هر بلیت — عموم: ${money(event.price)} تومان؛ دانشجوی فردوسی: ${money(event.fum_student_price)} تومان`
+    : event.is_paid && Number(event.price) > 0 ? `قیمت هر بلیت: ${money(event.price)} تومان` : 'قیمت: رایگان';
+  return [event.name, event.description || '', `شناسه: ${event.id}`, `مکان: ${event.place_name || 'بدون مکان مشخص'}`, event.address || event.place_address ? `نشانی: ${event.address || event.place_address}` : '', neshanUrl(event.place_map_url) ? `موقعیت در نشان: ${neshanUrl(event.place_map_url)}` : '', `زمان شروع: ${eventTime(event.starts_at)}`, `ظرفیت: ${event.capacity}`, event.remaining != null ? `ظرفیت باقی‌مانده: ${event.remaining}` : '', `سقف بلیت برای هر نفر: ${event.max_per_user}`, prices, `وضعیت: ${event.active ? 'فعال' : 'غیرفعال'}`].filter(Boolean).join('\n');
 }
 function orderText(order) {
-  return `${order.event_name || 'رویداد'}\nشناسه سفارش: ${order.id}\nتعداد بلیت: ${order.quantity}\nوضعیت: ${STATUS[order.status] || order.status}`;
+  return `${order.event_name || 'رویداد'}\nشناسه سفارش: ${order.id}\nگروه تعرفه: ${pricingGroupLabel(order.pricing_group)}\nقیمت هر بلیت: ${money(order.unit_price)} تومان\nتعداد بلیت: ${order.quantity}\nمبلغ کل: ${money(Number(order.unit_price) * Number(order.quantity))} تومان\nوضعیت: ${STATUS[order.status] || order.status}`;
 }
 function csv(rows, columns) {
   const cell = v => {
@@ -127,10 +134,13 @@ export async function handleUpdate(update, env, store) {
   };
   const selectEvent = async eventId => {
     if (!await needAccount()) return;
-    const event = await store.getEvent(positive(eventId));
-    if (!event || !event.active || event.archived) return send('این رویداد موجود نیست یا ثبت‌نام آن متوقف شده است');
-    if (event.is_paid && Number(event.price) > 0 && !env.VERIFICATION_CHAT) return send('ثبت نام رویدادهای پولی تا تنظیم گروه بررسی پرداخت متوقف است');
-    await send(eventText(event) + '\n\nتعداد بلیت مورد نظر را وارد کنید\nبرای توقف /cancel را بفرستید');
+    const pricing = await store.getEventPricing(from.id, positive(eventId), env.FUM_STUDENT_NUMBER_LENGTH);
+    const { event } = pricing;
+    if (pricing.requires_student_number) return promptFumStudentNumber(event.id);
+    if (pricing.unit_price > 0 && !env.VERIFICATION_CHAT) return send('ثبت‌نام رویدادهای دارای هزینه تا تنظیم گروه بررسی پرداخت متوقف است');
+    const appliedPrice = `تعرفه اعمال‌شده: ${pricingGroupLabel(pricing.pricing_group)}\nقیمت هر بلیت برای شما: ${money(pricing.unit_price)} تومان`;
+    const note = pricing.pricing_group === 'fum_student' ? '\nاین تعرفه بر اساس اطلاعات خوداظهاری حساب شماست و از دانشگاه استعلام نمی‌شود.' : '';
+    await send(`${eventText(event)}\n${appliedPrice}${note}\n\nتعداد بلیت مورد نظر را وارد کنید\nبرای توقف /cancel را بفرستید`);
     await store.setState(from.id, 'reserve_quantity', { event_id: event.id, last_update_id: update.update_id });
   };
   const showOrders = async (offset = 0) => {
@@ -145,6 +155,38 @@ export async function handleUpdate(update, env, store) {
   const transition = async (step, data, text, markup) => {
     await send(text, markup);
     await store.setState(from.id, step, { ...data, last_update_id: update.update_id });
+  };
+  const promptFumStudentNumber = async (eventId = null) => transition('fum_student_number', { event_id: eventId ? Number(eventId) : null },
+    `برای ادامه، شماره دانشجویی ${money(configuredStudentNumberLength(env.FUM_STUDENT_NUMBER_LENGTH))} رقمی خود را وارد کنید. این شماره خوداظهاری است و از سامانه دانشگاه استعلام نمی‌شود.\nبرای توقف /cancel را بفرستید`);
+  const saveFumStudentNumber = async (value, data = {}) => {
+    const user = await needAccount();
+    if (!user) return;
+    if (!isFumStudent(user.profile)) {
+      await store.setState(from.id, 'idle', { last_update_id: update.update_id });
+      return send('در اطلاعات حساب شما دانشجویی فردوسی ثبت نشده است؛ برای این رویداد تعرفه عمومی اعمال می‌شود');
+    }
+    const number = normalizeStudentNumber(value);
+    const exactLength = configuredStudentNumberLength(env.FUM_STUDENT_NUMBER_LENGTH);
+    if (!isValidStudentNumber(number, exactLength)) {
+      throw new Error(`شماره دانشجویی را فقط با ${money(exactLength)} رقم وارد کنید؛ صفرهای ابتدایی شماره را هم بنویسید`);
+    }
+    await store.upsertUser({ id: from.id, username: user.username, profile: { student_number: number } });
+    if (data.event_id) {
+      await send('شماره به‌صورت رشته ذخیره شد؛ اصالت آن از دانشگاه بررسی نمی‌شود');
+      return selectEvent(data.event_id);
+    }
+    await store.setState(from.id, 'idle', { last_update_id: update.update_id });
+    return send('شماره دانشجویی در اطلاعات حساب ذخیره شد. صحت آن از دانشگاه استعلام نمی‌شود', MENU);
+  };
+  const completeReservation = async (result, eventId) => {
+    if (result.order.status === 'approved') {
+      await notifyOrder({ ...result.order, tickets: result.tickets }, env, store);
+      await store.setState(from.id, 'idle', { last_update_id: update.update_id });
+      return;
+    }
+    const event = await store.getEvent(eventId);
+    await send(`سفارش شما موقتا رزرو شد\n${orderText(result.order)}\n${event.payment_instructions || 'اطلاعات واریز در توضیحات رویداد آمده است'}\n\nعکس یا فایل رسید واریز را ارسال کنید\nاگر رسید را تا پایان مهلت رزرو نفرستید ظرفیت آزاد می‌شود`, { inline_keyboard: [[{ text: 'لغو سفارش', callback_data: `c:${result.order.id}` }]] });
+    await store.setState(from.id, 'payment_receipt', { order_id: result.order.id, last_update_id: update.update_id });
   };
   try {
     if (callback) {
@@ -187,6 +229,37 @@ export async function handleUpdate(update, env, store) {
         await store.clearState(from.id);
         return answer();
       }
+      if (data.startsWith('rq:')) {
+        const confirmation = /^rq:([yn]):([a-f0-9]{12})$/.exec(data);
+        if (!confirmation) return answer('درخواست تأیید نامعتبر است');
+        const state = await store.getState(from.id);
+        const current = stateData(state);
+        if (current.last_update_id === update.update_id) return answer();
+        if (state?.step !== 'reserve_confirm') return answer('این خلاصه سفارش دیگر فعال نیست');
+        if (current.quote_nonce !== confirmation[2]) return answer('این خلاصه سفارش دیگر فعال نیست');
+        if (confirmation[1] === 'n') {
+          await store.setState(from.id, 'idle', { last_update_id: update.update_id });
+          await send('این سفارش ثبت نشد', MENU);
+          return answer('سفارش لغو شد');
+        }
+        let result;
+        try {
+          result = await store.reserve(from.id, current.event_id, current.quantity, `${updateKey}:reserve`, current, configuredStudentNumberLength(env.FUM_STUDENT_NUMBER_LENGTH));
+        } catch (error) {
+          if (error.code === 'PRICE_CHANGED') {
+            await answer('مبلغ تغییر کرده است');
+            await store.setState(from.id, 'idle', { last_update_id: update.update_id });
+            return selectEvent(current.event_id);
+          }
+          if (error.code === 'STUDENT_PROFILE_INCOMPLETE') {
+            await answer('اطلاعات حساب را تکمیل کنید');
+            return promptFumStudentNumber(current.event_id);
+          }
+          throw error;
+        }
+        await completeReservation(result, current.event_id);
+        return answer('سفارش ثبت شد');
+      }
       if (data.startsWith('p:')) {
         const order = await store.getOrder(data.slice(2));
         if (!order || String(order.user_id) !== String(from.id) || order.status !== 'reserved' || order.expires_at <= Math.floor(Date.now() / 1000)) return answer('این سفارش قابل پرداخت نیست');
@@ -217,16 +290,18 @@ export async function handleUpdate(update, env, store) {
         const data = stateData(state);
         if (data.last_update_id === update.update_id) return;
         if (String(state.step).startsWith('signup:')) return await signupStep(state.step.slice(7), text, data, false);
+        if (state.step === 'fum_student_number') return await saveFumStudentNumber(text, data);
         if (state.step === 'reserve_quantity') {
-          const result = await store.reserve(from.id, data.event_id, positive(text), `${updateKey}:reserve`);
-          if (result.order.status === 'approved') await notifyOrder({ ...result.order, tickets: result.tickets }, env, store);
-          else {
-            const event = await store.getEvent(data.event_id);
-            await send(`سفارش شما موقتا رزرو شد\n${orderText(result.order)}\nمبلغ کل ${money(Number(result.order.unit_price) * result.order.quantity)} تومان\n${event.payment_instructions || ''}\n\nعکس یا فایل رسید واریز را ارسال کنید\nاگر رسید را تا پایان مهلت رزرو نفرستید ظرفیت آزاد میشود`, { inline_keyboard: [[{ text: 'لغو سفارش', callback_data: `c:${result.order.id}` }]] });
-          }
-          if (result.order.status === 'reserved') await store.setState(from.id, 'payment_receipt', { order_id: result.order.id, last_update_id: update.update_id });
-          else await store.setState(from.id, 'idle', { last_update_id: update.update_id });
+          const quote = await store.quoteOrder(from.id, data.event_id, positive(text), configuredStudentNumberLength(env.FUM_STUDENT_NUMBER_LENGTH));
+          const group = pricingGroupLabel(quote.pricing_group);
+          const note = quote.pricing_group === 'fum_student' ? '\n\nاین تعرفه بر اساس اطلاعات خوداظهاری حساب شماست و از دانشگاه استعلام نمی‌شود.' : '';
+          const quoteNonce = crypto.randomUUID().replaceAll('-', '').slice(0, 12);
+          await send(`خلاصه سفارش\nگروه تعرفه: ${group}\nقیمت هر بلیت: ${money(quote.unit_price)} تومان\nتعداد بلیت: ${quote.quantity}\nمبلغ کل: ${money(quote.total_price)} تومان${note}\n\nبرای ثبت سفارش، مبلغ را بررسی و تأیید کنید`, { inline_keyboard: [[{ text: 'تأیید و رزرو', callback_data: `rq:y:${quoteNonce}` }, { text: 'انصراف', callback_data: `rq:n:${quoteNonce}` }]] });
+          await store.setState(from.id, 'reserve_confirm', { ...quote, quote_nonce: quoteNonce, last_update_id: update.update_id });
           return;
+        }
+        if (state.step === 'reserve_confirm') {
+          return send('خلاصه سفارش را با دکمه تأیید یا انصراف پاسخ دهید');
         }
         if (state.step === 'payment_receipt') {
           const photo = message.photo?.at(-1);
@@ -236,21 +311,20 @@ export async function handleUpdate(update, env, store) {
           if (!env.VERIFICATION_CHAT) return send('گروه بررسی پرداخت تنظیم نشده است لطفا با مدیر تماس بگیرید');
           const receiptType = photo ? 'photo' : 'document';
           const order = await store.submitReceipt(data.order_id, from.id, photo?.file_id || document.file_id, receiptType, `${updateKey}:receipt`);
-          const user = await store.getUser(from.id);
-          const isFumStudent = profileOf(user).is_fum_student;
           const previousTickets = await store.countApprovedTickets(from.id, order.event_id);
           const placeMapUrl = neshanUrl(order.place_map_url);
           const receiptCaption = [
             `کد سفارش: ${order.id}`,
             `شناسه کاربر: ${order.user_id}`,
             `نام و نام خانوادگی: ${[order.first_name, order.last_name].filter(Boolean).join(' ') || 'ثبت نشده'}`,
-            `دانشجوی فردوسی: ${isFumStudent == null ? 'نامشخص' : isFumStudent ? 'بله' : 'خیر'}`,
+            `گروه تعرفه هنگام سفارش: ${pricingGroupLabel(order.pricing_group)}`,
             `نام رویداد: ${order.event_name || 'نامشخص'}`,
             order.place_name ? `مکان: ${String(order.place_name).slice(0, 120)}` : '',
             order.place_address ? `نشانی: ${String(order.place_address).slice(0, 160)}` : '',
             `تعداد بلیت درخواستی: ${order.quantity}`,
             `تعداد بلیت‌های قبلا خریداری شده: ${previousTickets}`,
-            `مبلغ کل: ${money(Number(order.unit_price) * Number(order.quantity))} تومان`,
+            `مبلغ هر بلیت مورد انتظار: ${money(order.unit_price)} تومان`,
+            `مبلغ کل مورد انتظار: ${money(Number(order.unit_price) * Number(order.quantity))} تومان`,
           ].join('\n');
           await store.enqueue(photo ? 'sendPhoto' : 'sendDocument', { chat_id: env.VERIFICATION_CHAT, [photo ? 'photo' : 'document']: order.receipt_file_id, caption: receiptCaption.slice(0, 1000), reply_markup: { inline_keyboard: [[{ text: 'تأیید پرداخت', callback_data: `r:${order.id}:y` }, { text: 'رد درخواست', callback_data: `r:${order.id}:n` }], ...(placeMapUrl ? [[{ text: 'موقعیت در نشان', url: placeMapUrl }]] : [])] } }, `receipt:${order.id}:${order.receipt_file_id}`);
           await send('رسید شما برای بررسی فرستاده شد\nنتیجه از همین ربات به شما اطلاع داده می‌شود', MENU);
@@ -270,7 +344,7 @@ export async function handleUpdate(update, env, store) {
     }
     if (command === 'id') return send(`شناسه تلگرام شما ${from.id}`);
     if (command === 'help') {
-      const guide = 'ثبت نام /add_account\nاطلاعات حساب /get_account\nرویدادها /available_events\nسفارشها و بلیتهای من /my_tickets\nشناسه گفتگو /chatid\nتوقف مرحله جاری /cancel\nحذف اطلاعات حساب /delete_account';
+      const guide = 'ثبت نام /add_account\nاطلاعات حساب /get_account\nتکمیل شماره دانشجویی فردوسی /complete_student_info\nرویدادها /available_events\nسفارشها و بلیتهای من /my_tickets\nشناسه گفتگو /chatid\nتوقف مرحله جاری /cancel\nحذف اطلاعات حساب /delete_account';
       if (isAdmin) return send(`${guide}\nپنل مدیریت /admin\nراهنمای مدیر /admin_help`, MENU);
       if (isChecker) return send(`${guide}\nپنل پذیرش /admin\nراهنمای پذیرش /checkin_help`, MENU);
       return send(guide, MENU);
@@ -290,6 +364,12 @@ export async function handleUpdate(update, env, store) {
       if (user) return send(userText(user), MENU);
       return;
     }
+    if (command === 'complete_student_info') {
+      const user = await needAccount();
+      if (!user) return;
+      if (!isFumStudent(user.profile)) return send('در اطلاعات فعلی حساب شما دانشجویی فردوسی ثبت نشده است؛ این رویدادها برای شما با تعرفه عمومی محاسبه می‌شوند', MENU);
+      return promptFumStudentNumber();
+    }
     if (command === 'delete_account') {
       const user = await store.getUser(from.id);
       if (!user) return send('حسابی برای شما ثبت نشده است');
@@ -305,9 +385,26 @@ export async function handleUpdate(update, env, store) {
     if (!isChecker) return send('این دستور موجود نیست یا اجازه اجرای آن را ندارید');
     if (command === 'admin_help') {
       if (!isAdmin) return send('این دستور موجود نیست یا اجازه اجرای آن را ندارید');
-      return send('پنل مدیریت /admin\nبررسی بلیت /get_ticket CODE\nثبت ورود /attend_ticket CODE\nفهرست رویدادها /get_events\nفهرست مکانها /get_places\nگزارش ظرفیت /count_tickets\nراهنمای ساخت مکان /add_place\nراهنمای ساخت رویداد /add_event\nخروجی کاربران /export_users\nخروجی بلیتها /export_tickets EVENT_ID\nپیام به همه /message_all\nپیام به رویداد /message_event');
+      return send(commandGuide('راهنمای مدیر سامانه', [
+        ['پنل مدیریت', '/admin'],
+        ['بررسی بلیت', '/get_ticket CODE'],
+        ['ثبت ورود', '/attend_ticket CODE'],
+        ['فهرست رویدادها', '/get_events'],
+        ['فهرست مکان‌ها', '/get_places'],
+        ['گزارش ظرفیت', '/count_tickets'],
+        ['راهنمای افزودن مکان', '/add_place'],
+        ['راهنمای افزودن رویداد', '/add_event'],
+        ['خروجی کاربران', '/export_users'],
+        ['خروجی بلیت‌های رویداد', '/export_tickets EVENT_ID'],
+        ['ارسال پیام همگانی', '/message_all'],
+        ['ارسال پیام به شرکت‌کنندگان رویداد', '/message_event'],
+      ]));
     }
-    if (command === 'checkin_help') return send('پنل پذیرش /admin\nبررسی بلیت /get_ticket CODE\nثبت ورود /attend_ticket CODE');
+    if (command === 'checkin_help') return send(commandGuide('راهنمای پذیرش', [
+      ['پنل پذیرش', '/admin'],
+      ['بررسی بلیت', '/get_ticket CODE'],
+      ['ثبت ورود', '/attend_ticket CODE'],
+    ]));
     if (command === 'get_ticket') {
       const ticket = await store.getTicket(arg);
       if (!ticket) return send('بلیت پیدا نشد');
@@ -493,13 +590,16 @@ export async function handleUpdate(update, env, store) {
       p.is_fum_student = bool();
       if (p.is_fum_student) {
         Object.assign(p, { is_student: true, is_mashhad_student: true, university_name: 'دانشگاه فردوسی مشهد', is_graduate_student: false, is_student_relative: false });
-        return next('student_number', 'شماره دانشجویی خود را وارد کنید');
+        return next('student_number', `شماره دانشجویی ${money(configuredStudentNumberLength(env.FUM_STUDENT_NUMBER_LENGTH))} رقمی خود را وارد کنید. این شماره خوداظهاری است و از سامانه دانشگاه استعلام نمی‌شود.`);
       }
       return askYesNo('is_student', 'دانشجو هستید؟');
     }
     if (step === 'student_number') {
-      const number = digits(input);
-      if (isCallback || !/^\d{3,20}$/.test(number)) throw new Error('شماره دانشجویی را با ۳ تا ۲۰ رقم وارد کنید');
+      const number = normalizeStudentNumber(input);
+      const exactLength = configuredStudentNumberLength(env.FUM_STUDENT_NUMBER_LENGTH);
+      if (isCallback || !isValidStudentNumber(number, exactLength)) {
+        throw new Error(`شماره دانشجویی را فقط با ${money(exactLength)} رقم وارد کنید؛ صفرهای ابتدایی شماره را هم بنویسید`);
+      }
       p.student_number = number;
       return next('fum_faculty', 'دانشکده خود را انتخاب کنید', { inline_keyboard: FACULTIES.map((f, i) => [{ text: f, callback_data: `s:f${i}` }]) });
     }
