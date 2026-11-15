@@ -18,6 +18,9 @@ function shortTicketCode(value) {
 function ownerIds(env) {
   return String(env.OWNER_IDS || '').split(',').map(x => x.trim()).filter(Boolean);
 }
+function commandGuide(title, entries) {
+  return `${title}\n\n${entries.map(([label, command]) => `${label}: \u2066${command}\u2069`).join('\n')}`;
+}
 async function roleOf(id, env, store) {
   if (ownerIds(env).includes(String(id))) return 'owner';
   return (await store.getAdmin(id))?.role || 'user';
@@ -305,9 +308,26 @@ export async function handleUpdate(update, env, store) {
     if (!isChecker) return send('این دستور موجود نیست یا اجازه اجرای آن را ندارید');
     if (command === 'admin_help') {
       if (!isAdmin) return send('این دستور موجود نیست یا اجازه اجرای آن را ندارید');
-      return send('پنل مدیریت /admin\nبررسی بلیت /get_ticket CODE\nثبت ورود /attend_ticket CODE\nفهرست رویدادها /get_events\nفهرست مکانها /get_places\nگزارش ظرفیت /count_tickets\nراهنمای ساخت مکان /add_place\nراهنمای ساخت رویداد /add_event\nخروجی کاربران /export_users\nخروجی بلیتها /export_tickets EVENT_ID\nپیام به همه /message_all\nپیام به رویداد /message_event');
+      return send(commandGuide('راهنمای مدیر سامانه', [
+        ['پنل مدیریت', '/admin'],
+        ['بررسی بلیت', '/get_ticket CODE'],
+        ['ثبت ورود', '/attend_ticket CODE'],
+        ['فهرست رویدادها', '/get_events'],
+        ['فهرست مکان‌ها', '/get_places'],
+        ['گزارش ظرفیت', '/count_tickets'],
+        ['راهنمای افزودن مکان', '/add_place'],
+        ['راهنمای افزودن رویداد', '/add_event'],
+        ['خروجی کاربران', '/export_users'],
+        ['خروجی بلیت‌های رویداد', '/export_tickets EVENT_ID'],
+        ['ارسال پیام همگانی', '/message_all'],
+        ['ارسال پیام به شرکت‌کنندگان رویداد', '/message_event'],
+      ]));
     }
-    if (command === 'checkin_help') return send('پنل پذیرش /admin\nبررسی بلیت /get_ticket CODE\nثبت ورود /attend_ticket CODE');
+    if (command === 'checkin_help') return send(commandGuide('راهنمای پذیرش', [
+      ['پنل پذیرش', '/admin'],
+      ['بررسی بلیت', '/get_ticket CODE'],
+      ['ثبت ورود', '/attend_ticket CODE'],
+    ]));
     if (command === 'get_ticket') {
       const ticket = await store.getTicket(arg);
       if (!ticket) return send('بلیت پیدا نشد');

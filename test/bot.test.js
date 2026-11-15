@@ -110,3 +110,31 @@ test('signup choice closes its keyboard and confirms the selected value', async 
   assert.deepEqual(edited.reply_markup, { inline_keyboard: [] });
   f.db.close();
 });
+
+test('admin_help and checkin_help format commands with LTR isolation for authorized roles', async () => {
+  const f = setup();
+  await f.send('/admin_help');
+  let messages = (await f.db.prepare("SELECT payload FROM outbox WHERE method='sendMessage'").all()).results.map(r => JSON.parse(r.payload));
+  assert.equal(messages[messages.length - 1].text, 'این دستور موجود نیست یا اجازه اجرای آن را ندارید');
+
+  const ownerMsg = f.message('/admin_help');
+  ownerMsg.message.from.id = 99;
+  ownerMsg.message.chat.id = 99;
+  await handleUpdate(ownerMsg, f.env, f.store);
+  messages = (await f.db.prepare("SELECT payload FROM outbox WHERE method='sendMessage'").all()).results.map(r => JSON.parse(r.payload));
+  const adminText = messages[messages.length - 1].text;
+  assert.match(adminText, /راهنمای مدیر سامانه/);
+  assert.match(adminText, /\u2066\/admin\u2069/);
+
+  await f.store.setAdmin(2, 'checkin');
+  const checkerMsg = f.message('/checkin_help');
+  checkerMsg.message.from.id = 2;
+  checkerMsg.message.chat.id = 2;
+  await handleUpdate(checkerMsg, f.env, f.store);
+  messages = (await f.db.prepare("SELECT payload FROM outbox WHERE method='sendMessage'").all()).results.map(r => JSON.parse(r.payload));
+  const checkerText = messages[messages.length - 1].text;
+  assert.match(checkerText, /راهنمای پذیرش/);
+  assert.match(checkerText, /\u2066\/attend_ticket CODE\u2069/);
+
+  f.db.close();
+});
