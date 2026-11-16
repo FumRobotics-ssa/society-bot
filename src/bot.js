@@ -331,7 +331,6 @@ export async function handleUpdate(update, env, store) {
           const receiptType = photo ? 'photo' : 'document';
           const order = await store.submitReceipt(data.order_id, from.id, photo?.file_id || document.file_id, receiptType, `${updateKey}:receipt`);
           const previousTickets = await store.countApprovedTickets(from.id, order.event_id);
-          const placeMapUrl = neshanUrl(order.place_map_url);
           const receiptCaption = [
             `کد سفارش: ${order.id}`,
             `شناسه کاربر: ${order.user_id}`,
@@ -345,7 +344,7 @@ export async function handleUpdate(update, env, store) {
             `مبلغ هر بلیت مورد انتظار: ${money(order.unit_price)} تومان`,
             `مبلغ کل مورد انتظار: ${money(Number(order.unit_price) * Number(order.quantity))} تومان`,
           ].join('\n');
-          await store.enqueue(photo ? 'sendPhoto' : 'sendDocument', { chat_id: env.VERIFICATION_CHAT, [photo ? 'photo' : 'document']: order.receipt_file_id, caption: receiptCaption.slice(0, 1000), reply_markup: { inline_keyboard: [[{ text: 'تأیید پرداخت', callback_data: `r:${order.id}:y` }, { text: 'رد درخواست', callback_data: `r:${order.id}:n` }], ...(placeMapUrl ? [[{ text: 'موقعیت در نشان', url: placeMapUrl }]] : [])] } }, `receipt:${order.id}:${order.receipt_file_id}`);
+          await store.enqueue(photo ? 'sendPhoto' : 'sendDocument', { chat_id: env.VERIFICATION_CHAT, [photo ? 'photo' : 'document']: order.receipt_file_id, caption: receiptCaption.slice(0, 1000), reply_markup: { inline_keyboard: [[{ text: 'تأیید پرداخت', callback_data: `r:${order.id}:y` }, { text: 'رد درخواست', callback_data: `r:${order.id}:n` }]] } }, `receipt:${order.id}:${order.receipt_file_id}`);
           await send('رسید شما برای بررسی فرستاده شد\nنتیجه از همین ربات به شما اطلاع داده می‌شود', MENU);
           await store.setState(from.id, 'idle', { last_update_id: update.update_id });
           return;

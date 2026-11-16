@@ -58,7 +58,8 @@ test('paid reserve receipt owner approval and retried update preserve one order'
   assert.equal((await f.store.listOrders()).length, 1);
   const receipt = f.message('', { photo: [{ file_id: 'safe-photo', file_size: 1000 }] }); await handleUpdate(receipt, f.env, f.store);
   const receiptPayload = (await f.db.prepare("SELECT payload FROM outbox WHERE method='sendPhoto'").first()).payload;
-  assert.match(receiptPayload, /https:\/\/nshn.ir\/example/);
+  assert.ok(receiptPayload.includes('تأیید پرداخت') && receiptPayload.includes('رد درخواست'));
+  assert.ok(!receiptPayload.includes('موقعیت در نشان'));
   const order = (await f.store.listOrders())[0]; assert.equal(order.status, 'pending');
   const review = f.callback(`r:${order.id}:y`); review.callback_query.message.chat = { id: -100123, type: 'supergroup' };
   await handleUpdate(review, f.env, f.store); assert.equal((await f.store.getOrder(order.id)).status, 'pending');
