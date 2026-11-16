@@ -72,8 +72,9 @@ function eventText(event) {
     : event.is_paid && Number(event.price) > 0 ? `قیمت هر بلیت: ${money(event.price)} تومان` : 'قیمت: رایگان';
   return [event.name, event.description || '', `شناسه: ${event.id}`, `مکان: ${event.place_name || 'بدون مکان مشخص'}`, event.address || event.place_address ? `نشانی: ${event.address || event.place_address}` : '', neshanUrl(event.place_map_url) ? `موقعیت در نشان: ${neshanUrl(event.place_map_url)}` : '', `زمان شروع: ${eventTime(event.starts_at)}`, `ظرفیت: ${event.capacity}`, event.remaining != null ? `ظرفیت باقی‌مانده: ${event.remaining}` : '', `سقف بلیت برای هر نفر: ${event.max_per_user}`, prices, `وضعیت: ${event.active ? 'فعال' : 'غیرفعال'}`].filter(Boolean).join('\n');
 }
-function orderText(order) {
-  return `${order.event_name || 'رویداد'}\nشناسه سفارش: ${order.id}\nگروه تعرفه: ${pricingGroupLabel(order.pricing_group)}\nقیمت هر بلیت: ${money(order.unit_price)} تومان\nتعداد بلیت: ${order.quantity}\nمبلغ کل: ${money(Number(order.unit_price) * Number(order.quantity))} تومان\nوضعیت: ${STATUS[order.status] || order.status}`;
+function orderText(order, prefixName = true) {
+  const nameLine = prefixName ? `نام رویداد: ${order.event_name || 'رویداد'}\n` : '';
+  return `${nameLine}شناسه سفارش: ${order.id}\nگروه تعرفه: ${pricingGroupLabel(order.pricing_group)}\nقیمت هر بلیت: ${money(order.unit_price)} تومان\nتعداد بلیت: ${order.quantity}\nمبلغ کل: ${money(Number(order.unit_price) * Number(order.quantity))} تومان\nوضعیت: ${STATUS[order.status] || order.status}`;
 }
 function csv(rows, columns) {
   const cell = v => {
@@ -92,8 +93,17 @@ export async function notifyOrder(order, env, store, key = `order:${order.id}`) 
     return;
   }
   const mapUrl = neshanUrl(order.place_map_url);
+  const eventHeader = `نام رویداد: ${order.event_name || 'رویداد'}\n`;
   for (let start = 0; start < Math.max(tickets.length, 1); start += 20) {
-    await store.enqueue('sendMessage', { chat_id: order.user_id, text: `ثبت نام شما تأیید شد\n${orderText(order)}\nبرای مشاهده بلیت و کد QR دکمه‌های زیر را باز کنید`, reply_markup: { inline_keyboard: [...tickets.slice(start, start + 20).map((ticket, i) => [{ text: `بلیت ${start + i + 1}`, url: link(env, `/ticket/${ticket.token}`) }]), ...(mapUrl ? [[{ text: 'موقعیت مکان در نشان', url: mapUrl }]] : [])] } }, `${key}:approved:${start}`);
+    const ticketButtons = tickets.slice(start, start + 20).map((ticket, i) => [
+      { text: tickets.length === 1 ? 'بلیت' : `بلیت ${start + i + 1}`, url: link(env, `/ticket/${ticket.token}`) }
+    ]);
+    if (mapUrl) ticketButtons.push([{ text: 'موقعیت مکان در نشان', url: mapUrl }]);
+    await store.enqueue('sendMessage', {
+      chat_id: order.user_id,
+      text: `${eventHeader}ثبت نام شما تأیید شد\n${orderText(order, false)}\nبرای مشاهده بلیت و کد QR دکمه‌های زیر را باز کنید`,
+      reply_markup: { inline_keyboard: ticketButtons }
+    }, `${key}:approved:${start}`);
   }
 }
 

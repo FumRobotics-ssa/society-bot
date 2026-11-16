@@ -40,7 +40,9 @@ test('free reservation auto-issues a ticket without requesting a receipt', async
   assert.equal((await f.store.getState(1)).step, 'idle');
   assert.equal((await f.db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE method IN ('sendPhoto','sendDocument')").first()).n, 0);
   const messages = (await f.db.prepare("SELECT payload FROM outbox WHERE method='sendMessage'").all()).results.map(row => JSON.parse(row.payload));
-  const ticketLink = messages.flatMap(message => message.reply_markup?.inline_keyboard || []).flat().find(button => button.text === 'بلیت 1');
+  const ticketLink = messages.flatMap(message => message.reply_markup?.inline_keyboard || []).flat().find(button => button.text === 'بلیت');
+  assert.ok(ticketLink, 'Button text should be بلیت');
+  assert.ok(messages.some(m => m.text && m.text.startsWith('نام رویداد: ')), 'Message should start with event name');
   assert.match(ticketLink.url, /^https:\/\/robotics-society\.fum-robotics-ssa\.workers\.dev\/ticket\/[0-9a-f]{64}$/);
   f.db.close();
 });
