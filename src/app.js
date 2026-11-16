@@ -59,7 +59,7 @@ function ticketHTML(ticket, env, print = false) {
   }
   return `<article class="ticket">${brand}${details}</article>`;
 }
-function page(content, title = 'بلیت انجمن رباتیک') { return `<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><link rel="stylesheet" href="/ticket.css"><body><main>${content}</main><script src="/grid.js" defer></script></body></html>`; }
+function page(content, title = 'بلیت انجمن رباتیک') { return `<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png"><link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"><link rel="shortcut icon" href="/favicon.ico"><link rel="stylesheet" href="/ticket.css"><body><main>${content}</main><script src="/grid.js" defer></script></body></html>`; }
 function pagination(url) { return { limit: Math.min(200, Math.max(1, Number(url.searchParams.get('limit')) || 100)), offset: Math.max(0, Number(url.searchParams.get('offset')) || 0) }; }
 async function allPages(loader) {
   const rows = [];
@@ -224,7 +224,7 @@ async function route(request, env, ctx) {
     return html(page(ticketHTML(row, env)));
   }
   if (url.pathname === '/') return Response.redirect(new URL('/admin', request.url), 302);
-  const assets = ['/admin', '/admin.html', '/admin.js', '/jalali.js', '/grid.js', '/style.css', '/ticket.css', '/logo.png', '/logo-white.svg'];
+  const assets = ['/admin', '/admin.html', '/admin.js', '/jalali.js', '/grid.js', '/style.css', '/ticket.css', '/logo.png', '/logo-white.svg', '/favicon.ico', '/favicon.png', '/favicon-32x32.png', '/favicon-16x16.png', '/apple-touch-icon.png', '/favicon.svg'];
   if (!assets.includes(url.pathname) && !/^\/fonts\/(?:Meem-[A-Za-z]+\.ttf|fontawesome-webfont\.woff2)$/.test(url.pathname)) fail('مسیر پیدا نشد', 404);
   const asset = new URL(request.url); if (url.pathname === '/admin') asset.pathname = '/admin.html';
   return env.ASSETS.fetch(new Request(asset, request));
