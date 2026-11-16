@@ -38,7 +38,23 @@ function qrSvg(url) { const code = qr(0, 'M'); code.addData(url); code.make(); r
 function ticketHTML(ticket, env, print = false) {
   const mapUrl = neshanUrl(ticket.place_map_url);
   const valid = ticket.order_status === 'approved';
-  const card = `<article class="ticket"><picture class="ticket-logo-wrap"><source media="print" srcset="/logo.png"><source media="(max-width: 700px)" srcset="/logo-white.svg"><img class="association-logo" src="/logo.png" alt="نشان انجمن رباتیک دانشگاه فردوسی مشهد" width="76" height="76"></picture><p>انجمن علمی رباتیک دانشگاه فردوسی مشهد</p><h2>${esc(ticket.event_name)}</h2>${ticket.place_name ? `<p>مکان: ${esc(ticket.place_name)}</p>` : ''}${ticket.place_address ? `<p>نشانی: ${esc(ticket.place_address)}</p>` : ''}${mapUrl ? `<p><a class="ticket-map" href="${esc(mapUrl)}" target="_blank" rel="noopener noreferrer">موقعیت و مسیریابی در نشان</a></p>` : ''}<p>${valid ? ticket.checked_in_at ? 'ورود ثبت شده' : 'بلیت معتبر' : 'این بلیت معتبر نیست'}</p><img src="/ticket/${ticket.token}/qr.svg" alt="کد QR بلیت" width="240" height="240"><p>کد پذیرش</p><p dir="ltr">${esc(shortTicketCode(ticket.checkin_code))}</p>${print ? `<p>${esc(ticket.first_name)} ${esc(ticket.last_name)}</p>` : ''}<p>برای ثبت ورود کد را به مسئول پذیرش نشان دهید</p></article>`;
+  const status = valid ? ticket.checked_in_at ? 'ورود ثبت شده' : 'بلیت معتبر' : 'این بلیت معتبر نیست';
+  const statusClass = valid ? ticket.checked_in_at ? 'is-checked-in' : 'is-valid' : 'is-invalid';
+  const card = `<article class="ticket">
+    <header class="ticket-brand">
+      <picture class="ticket-logo-wrap"><source media="print" srcset="/logo.png"><img class="association-logo" src="/logo-white.svg" alt="نشان انجمن رباتیک دانشگاه فردوسی مشهد" width="76" height="76"></picture>
+      <div class="ticket-brand-copy"><strong>انجمن رباتیک</strong><span>دانشگاه فردوسی مشهد</span></div>
+    </header>
+    <div class="ticket-content">
+      <section class="ticket-section ticket-event" aria-label="رویداد"><span class="ticket-label">بلیت رویداد</span><h2>${esc(ticket.event_name)}</h2>${ticket.place_name ? `<span class="ticket-event-place">${esc(ticket.place_name)}</span>` : ''}</section>
+      ${ticket.place_address || mapUrl ? `<div class="ticket-section ticket-address"><span class="ticket-label">نشانی</span>${ticket.place_address ? `<span class="ticket-value">${esc(ticket.place_address)}</span>` : ''}${mapUrl ? `<a class="ticket-map" href="${esc(mapUrl)}" target="_blank" rel="noopener noreferrer">موقعیت و مسیریابی در نشان</a>` : ''}</div>` : ''}
+      <div class="ticket-section ticket-status ${statusClass}"><span class="ticket-label">وضعیت ورود</span><strong>${status}</strong></div>
+      <div class="ticket-section ticket-qr"><span class="ticket-label">اسکن بلیت</span><img src="/ticket/${ticket.token}/qr.svg" alt="کد QR بلیت" width="240" height="240"></div>
+      <div class="ticket-section ticket-code"><span class="ticket-label">کد پذیرش</span><strong dir="ltr">${esc(shortTicketCode(ticket.checkin_code))}</strong></div>
+      ${print ? `<p class="ticket-holder">${esc(ticket.first_name)} ${esc(ticket.last_name)}</p>` : ''}
+      <p class="ticket-help">برای ثبت ورود، کد را به مسئول پذیرش نشان دهید</p>
+    </div>
+  </article>`;
   if (!print && ticket.poster_url) {
     const posterSrc = `/api/events/${ticket.event_id}/poster`;
     return `<div class="ticket-view has-poster"><div class="ticket-poster-pane"><img class="ticket-poster" src="${esc(posterSrc)}" alt="پوستر ${esc(ticket.event_name)}"></div>${card}</div>`;
