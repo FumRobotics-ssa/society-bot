@@ -49,7 +49,7 @@ body::after {
   opacity: var(--grid-opacity, 0);
   transition: opacity .35s ease;
 }
-.ticket, .ticket-view.has-poster {
+.ticket {
   background: #191919;
   border: 1px solid #74a2f0;
   border-radius: 20px;
@@ -63,7 +63,6 @@ body::after {
 .ticket-view.has-poster {
   width: 100%;
   max-width: 840px;
-  overflow: hidden;
 }
 .ticket-view.has-poster > .ticket-brand {
   width: 100%;
