@@ -9,7 +9,7 @@ const json = (data, status = 200, headers = {}) => new Response(JSON.stringify(d
 const html = text => new Response(text, { headers: { 'Content-Type': 'text/html;charset=utf-8' } });
 const esc = value => String(value ?? '').replace(/[&<>"']/g, x => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[x]));
 function fail(message, status = 400) { const error = new Error(message); error.httpStatus = status; throw error; }
-async function body(request, max = 65536) {
+async function body(request, max = 1048576) {
   if (Number(request.headers.get('Content-Length') || 0) > max) fail('درخواست بیش از حد بزرگ است', 413);
   const reader = request.body?.getReader();
   if (!reader) return {};
@@ -38,7 +38,12 @@ function qrSvg(url) { const code = qr(0, 'M'); code.addData(url); code.make(); r
 function ticketHTML(ticket, env, print = false) {
   const mapUrl = neshanUrl(ticket.place_map_url);
   const valid = ticket.order_status === 'approved';
-  return `<article class="ticket"><picture class="ticket-logo-wrap"><source media="print" srcset="/logo.png"><source media="(max-width: 700px)" srcset="/logo-white.svg"><img class="association-logo" src="/logo.png" alt="نشان انجمن رباتیک دانشگاه فردوسی مشهد" width="76" height="76"></picture><p>انجمن علمی رباتیک دانشگاه فردوسی مشهد</p><h2>${esc(ticket.event_name)}</h2>${ticket.place_name ? `<p>مکان: ${esc(ticket.place_name)}</p>` : ''}${ticket.place_address ? `<p>نشانی: ${esc(ticket.place_address)}</p>` : ''}${mapUrl ? `<p><a class="ticket-map" href="${esc(mapUrl)}" target="_blank" rel="noopener noreferrer">موقعیت و مسیریابی در نشان</a></p>` : ''}<p>${valid ? ticket.checked_in_at ? 'ورود ثبت شده' : 'بلیت معتبر' : 'این بلیت معتبر نیست'}</p><img src="/ticket/${ticket.token}/qr.svg" alt="کد QR بلیت" width="240" height="240"><p>کد پذیرش</p><p dir="ltr">${esc(shortTicketCode(ticket.checkin_code))}</p>${print ? `<p>${esc(ticket.first_name)} ${esc(ticket.last_name)}</p>` : ''}<p>برای ثبت ورود کد را به مسئول پذیرش نشان دهید</p></article>`;
+  const card = `<article class="ticket"><picture class="ticket-logo-wrap"><source media="print" srcset="/logo.png"><source media="(max-width: 700px)" srcset="/logo-white.svg"><img class="association-logo" src="/logo.png" alt="نشان انجمن رباتیک دانشگاه فردوسی مشهد" width="76" height="76"></picture><p>انجمن علمی رباتیک دانشگاه فردوسی مشهد</p><h2>${esc(ticket.event_name)}</h2>${ticket.place_name ? `<p>مکان: ${esc(ticket.place_name)}</p>` : ''}${ticket.place_address ? `<p>نشانی: ${esc(ticket.place_address)}</p>` : ''}${mapUrl ? `<p><a class="ticket-map" href="${esc(mapUrl)}" target="_blank" rel="noopener noreferrer">موقعیت و مسیریابی در نشان</a></p>` : ''}<p>${valid ? ticket.checked_in_at ? 'ورود ثبت شده' : 'بلیت معتبر' : 'این بلیت معتبر نیست'}</p><img src="/ticket/${ticket.token}/qr.svg" alt="کد QR بلیت" width="240" height="240"><p>کد پذیرش</p><p dir="ltr">${esc(shortTicketCode(ticket.checkin_code))}</p>${print ? `<p>${esc(ticket.first_name)} ${esc(ticket.last_name)}</p>` : ''}<p>برای ثبت ورود کد را به مسئول پذیرش نشان دهید</p></article>`;
+  if (!print && ticket.poster_url) {
+    const posterSrc = `/api/events/${ticket.event_id}/poster`;
+    return `<div class="ticket-view has-poster"><div class="ticket-poster-pane"><img class="ticket-poster" src="${esc(posterSrc)}" alt="پوستر ${esc(ticket.event_name)}"></div>${card}</div>`;
+  }
+  return card;
 }
 function page(content, title = 'بلیت انجمن رباتیک') { return `<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><link rel="stylesheet" href="/ticket.css"><body><main>${content}</main><script src="/grid.js" defer></script></body></html>`; }
 function pagination(url) { return { limit: Math.min(200, Math.max(1, Number(url.searchParams.get('limit')) || 100)), offset: Math.max(0, Number(url.searchParams.get('offset')) || 0) }; }
@@ -68,6 +73,27 @@ async function api(request, env, store, url) {
   const path = url.pathname, method = request.method;
   if (!['GET', 'POST', 'PATCH', 'DELETE'].includes(method)) fail('روش درخواست مجاز نیست', 405);
   if (method !== 'GET' && !validOrigin(request, env)) fail('مبدا درخواست مجاز نیست', 403);
+  const posterMatch = path.match(/^\/api\/events\/(\d+)\/poster$/);
+  if (posterMatch && method === 'GET') {
+    const event = await store.getEvent(Number(posterMatch[1]));
+    if (!event || !event.poster_url) fail('پوستر پیدا نشد', 404);
+    if (event.poster_url.startsWith('data:')) {
+      const m = event.poster_url.match(/^data:([^;]+);base64,(.+)$/);
+      if (!m) fail('قالب پوستر نامعتبر است', 400);
+      const mime = m[1];
+      const binary = Uint8Array.from(atob(m[2]), c => c.charCodeAt(0));
+      return new Response(binary, {
+        headers: {
+          'Content-Type': mime,
+          'Cache-Control': 'public, max-age=86400',
+        }
+      });
+    }
+    if (/^https?:\/\//i.test(event.poster_url)) {
+      return Response.redirect(event.poster_url, 302);
+    }
+    fail('پوستر پیدا نشد', 404);
+  }
   if (path === '/api/session' && method === 'POST') {
     const data = await body(request);
     const session = await exchangeLogin(env.DB, data.token);

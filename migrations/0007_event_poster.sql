@@ -1,0 +1,1 @@
+ALTER TABLE events ADD COLUMN poster_url TEXT NOT NULL DEFAULT '';

@@ -195,4 +195,17 @@ select{
 .time-selects{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
 .time-selects label{gap:4px;font-size:11px}
 .time-selects select{height:42px;padding:8px;text-align:center}
-.event-price-options{display:grid;grid-template-columns:1fr 1fr;gap:14px 20px;align-items:end}.event-price-options .full{grid-column:1/-1}@media(max-width:700px){.event-price-options{grid-template-columns:1fr}.event-price-options .full{grid-column:auto}}
+.event-price-options{width:100%;grid-column:1/-1}
+#fixed-price-fields{display:grid;grid-template-columns:1fr;width:100%}
+#fixed-price-fields label{width:100%}
+#differentiated-price-fields{display:grid;grid-template-columns:1fr 1fr;gap:18px 22px;width:100%;align-items:end}
+#differentiated-price-fields .full{grid-column:1/-1}
+@media(max-width:700px){#differentiated-price-fields{grid-template-columns:1fr;gap:18px}}
+.event-checkboxes{display:flex;flex-wrap:wrap;gap:16px 28px;align-items:center;margin-top:2px}
+.event-checkboxes label.check{display:inline-flex;align-items:center;gap:9px;cursor:pointer;margin:0}
+.event-poster-field{display:flex;flex-direction:column;gap:8px}
+.poster-input-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:700px){.poster-input-row{grid-template-columns:1fr}}
+.poster-preview-wrap{display:flex;align-items:center;gap:14px;margin-top:8px;padding:10px 14px;background:#0f131a;border:1px dashed #74a2f055;border-radius:8px}
+.event-poster-preview{max-width:140px;max-height:140px;object-fit:contain;border-radius:6px;background:#191919;border:1px solid #74a2f044}
+.event-card-poster-thumb{display:block;width:100%;max-height:180px;object-fit:cover;border-radius:8px;margin:0 0 16px;border:1px solid #74a2f033;background:#0f131a}

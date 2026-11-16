@@ -109,6 +109,7 @@ export async function handleUpdate(update, env, store) {
   const isAdmin = role === 'admin' || role === 'owner';
   const isChecker = isAdmin || role === 'checkin';
   const send = (text, markup = undefined, tag = 'reply', chatId = chat.id) => store.enqueue('sendMessage', { chat_id: chatId, text: String(text).slice(0, 4000), ...(markup ? { reply_markup: markup } : {}) }, `${updateKey}:${tag}`);
+  const sendPhoto = (photo, caption = '', markup = undefined, tag = 'photo', chatId = chat.id) => store.enqueue('sendPhoto', { chat_id: chatId, photo, caption: String(caption).slice(0, 1024), ...(markup ? { reply_markup: markup } : {}) }, `${updateKey}:${tag}`);
   const answer = (text = '') => callback && store.enqueue('answerCallbackQuery', { callback_query_id: callback.id, text: text.slice(0, 190) }, `${updateKey}:answer`);
   const panel = async () => {
     if (!isChecker || chat.type !== 'private') return send('این بخش فقط برای مدیران مجاز در گفتگوی خصوصی فعال است');
@@ -140,7 +141,15 @@ export async function handleUpdate(update, env, store) {
     if (pricing.unit_price > 0 && !env.VERIFICATION_CHAT) return send('ثبت‌نام رویدادهای دارای هزینه تا تنظیم گروه بررسی پرداخت متوقف است');
     const appliedPrice = `تعرفه اعمال‌شده: ${pricingGroupLabel(pricing.pricing_group)}\nقیمت هر بلیت برای شما: ${money(pricing.unit_price)} تومان`;
     const note = pricing.pricing_group === 'fum_student' ? '\nاین تعرفه بر اساس اطلاعات خوداظهاری حساب شماست و از دانشگاه استعلام نمی‌شود.' : '';
-    await send(`${eventText(event)}\n${appliedPrice}${note}\n\nتعداد بلیت مورد نظر را وارد کنید\nبرای توقف /cancel را بفرستید`);
+    const details = `${eventText(event)}\n${appliedPrice}${note}\n\nتعداد بلیت مورد نظر را وارد کنید\nبرای توقف /cancel را بفرستید`;
+    if (event.poster_url) {
+      const poster = /^https?:\/\//i.test(event.poster_url)
+        ? event.poster_url
+        : `${(env.PUBLIC_URL || '').replace(/\/$/, '')}/api/events/${event.id}/poster`;
+      await sendPhoto(poster, details);
+    } else {
+      await send(details);
+    }
     await store.setState(from.id, 'reserve_quantity', { event_id: event.id, last_update_id: update.update_id });
   };
   const showOrders = async (offset = 0) => {

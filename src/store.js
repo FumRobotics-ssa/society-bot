@@ -232,14 +232,15 @@ export class Store {
     const price = pricingMode === 'differentiated' ? submittedPrice : paid ? submittedPrice : 0;
     const startsAt = string(v.starts_at, 'زمان رویداد', 100);
     if (startsAt && !Number.isFinite(Date.parse(startsAt))) throw domainError('INVALID_INPUT', 'زمان رویداد معتبر نیست');
+    const posterUrl = string(v.poster_url || '', 'پوستر رویداد', 500000);
     const values = [string(v.name, 'نام رویداد', 200, true), string(v.description, 'توضیحات', 3500), placeId, capacity,
       int(v.max_per_user, 'سقف هر نفر', 100), paid, price, pricingMode, fumStudentPrice,
-      string(v.payment_instructions, 'دستور پرداخت', 1500), startsAt, flag(v.active)];
+      string(v.payment_instructions, 'دستور پرداخت', 1500), startsAt, posterUrl, flag(v.active)];
     if (id) await this.run(`UPDATE events SET name=?,description=?,place_id=?,capacity=?,max_per_user=?,is_paid=?,price=?,
-      pricing_mode=?,fum_student_price=?,payment_instructions=?,starts_at=?,active=?,updated_at=unixepoch() WHERE id=?`, ...values, Number(id));
+      pricing_mode=?,fum_student_price=?,payment_instructions=?,starts_at=?,poster_url=?,active=?,updated_at=unixepoch() WHERE id=?`, ...values, Number(id));
     else {
-      const r = await this.run(`INSERT INTO events(name,description,place_id,capacity,max_per_user,is_paid,price,pricing_mode,fum_student_price,payment_instructions,starts_at,active)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, ...values);
+      const r = await this.run(`INSERT INTO events(name,description,place_id,capacity,max_per_user,is_paid,price,pricing_mode,fum_student_price,payment_instructions,starts_at,poster_url,active)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, ...values);
       id = r.meta.last_row_id;
     }
     return this.getEvent(id);
@@ -384,7 +385,7 @@ export class Store {
   ticketSelect() {
     return `SELECT t.*,o.user_id,o.event_id,o.quantity,o.status AS order_status,o.expires_at,o.unit_price,o.pricing_group,
       CASE WHEN t.checked_in_at IS NOT NULL THEN 'attended' ELSE o.status END AS status,
-      e.name AS event_name,e.starts_at,p.name AS place_name,p.address AS place_address,p.map_url AS place_map_url,
+      e.name AS event_name,e.starts_at,e.poster_url,p.name AS place_name,p.address AS place_address,p.map_url AS place_map_url,
       u.first_name,u.last_name,u.phone,u.username
       FROM tickets t JOIN orders o ON o.id=t.order_id JOIN events e ON e.id=o.event_id
       JOIN users u ON u.id=o.user_id LEFT JOIN places p ON p.id=e.place_id`;
