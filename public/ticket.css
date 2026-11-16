@@ -61,16 +61,23 @@ body::after {
   break-inside: avoid;
 }
 .ticket-view.has-poster {
-  display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr);
-  align-items: stretch;
   width: 100%;
   max-width: 840px;
   overflow: hidden;
 }
+.ticket-view.has-poster > .ticket-brand {
+  width: 100%;
+  margin: 0;
+  padding: 22px 20px 12px;
+}
+.ticket-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr);
+  align-items: stretch;
+}
 .ticket-view.has-poster .ticket {
   width: 100%;
-  padding: 24px 26px 26px;
+  padding: 20px 24px 26px;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -78,10 +85,10 @@ body::after {
 }
 .ticket-poster-pane {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   min-width: 0;
-  padding: 26px;
+  padding: 20px 22px 26px;
 }
 .ticket-poster {
   display: block;
@@ -101,7 +108,7 @@ body::after {
   text-align: center;
 }
 .ticket-logo-wrap { display: block; width: 72px; height: 72px; }
-.ticket .association-logo { display: block; width: 100%; height: 100%; object-fit: contain; }
+.ticket-brand .association-logo { display: block; width: 100%; height: 100%; object-fit: contain; }
 .ticket-brand-copy { display: flex; flex-direction: column; align-items: center; line-height: 1.25; }
 .ticket-brand-copy strong { font-size: 23px; font-weight: 900; }
 .ticket-brand-copy span { margin-top: 3px; color: #74a2f0; font-size: 13px; }
@@ -155,7 +162,8 @@ body::after {
 .print-help { width: 100%; text-align: center; }
 @media (max-width: 760px) {
   body { padding: 18px 14px; }
-  .ticket-view.has-poster { grid-template-columns: 1fr; max-width: 440px; }
+  .ticket-view.has-poster { max-width: 440px; }
+  .ticket-columns { grid-template-columns: 1fr; }
   .ticket-poster-pane { padding: 22px 22px 4px; }
   .ticket-poster { max-height: 380px; }
   .ticket-view.has-poster .ticket { padding: 20px 22px 24px; }
