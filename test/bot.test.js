@@ -223,15 +223,17 @@ test('bot displays poster as photo when event has poster and as text when no pos
 
   const noPosterEvent = await f.store.saveEvent({ name: 'رویداد ساده', capacity: 5 });
   await f.click(`e:${noPosterEvent.id}`);
-  let outbox = (await f.db.prepare("SELECT method, payload FROM outbox ORDER BY id DESC LIMIT 1").all()).results;
-  assert.equal(outbox[0].method, 'sendMessage');
-  assert.match(JSON.parse(outbox[0].payload).text, /رویداد ساده/);
+  let msg = (await f.db.prepare("SELECT method, payload FROM outbox WHERE method='sendMessage' ORDER BY rowid DESC LIMIT 1").all()).results[0];
+  assert.ok(msg);
+  assert.equal(msg.method, 'sendMessage');
+  assert.match(JSON.parse(msg.payload).text, /رویداد ساده/);
 
   const posterEvent = await f.store.saveEvent({ name: 'رویداد با پوستر', capacity: 5, poster_url: 'https://example.test/poster.jpg' });
   await f.click(`e:${posterEvent.id}`);
-  outbox = (await f.db.prepare("SELECT method, payload FROM outbox ORDER BY id DESC LIMIT 1").all()).results;
-  assert.equal(outbox[0].method, 'sendPhoto');
-  const photoPayload = JSON.parse(outbox[0].payload);
+  let photo = (await f.db.prepare("SELECT method, payload FROM outbox WHERE method='sendPhoto' ORDER BY rowid DESC LIMIT 1").all()).results[0];
+  assert.ok(photo);
+  assert.equal(photo.method, 'sendPhoto');
+  const photoPayload = JSON.parse(photo.payload);
   assert.equal(photoPayload.photo, 'https://example.test/poster.jpg');
   assert.match(photoPayload.caption, /رویداد با پوستر/);
   assert.match(photoPayload.caption, /تعداد بلیت مورد نظر را وارد کنید/);
