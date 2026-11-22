@@ -18,6 +18,94 @@ function setup() {
   const click = data => handleUpdate(callback(data), env, store);
   return { db, store, env, message, callback, send, click };
 }
+
+test('only event managers can request a stable registration link in private', async t => {
+  const f = setup();
+  t.after(() => f.db.close());
+  f.env.BOT_TOKEN = 'test-token-event-links';
+  const getMe = t.mock.method(globalThis, 'fetch', async url => {
+    assert.equal(url, 'https://api.telegram.org/bottest-token-event-links/getMe');
+    return Response.json({ ok: true, result: { username: 'FumExampleBot' } });
+  });
+  const event = await f.store.saveEvent({ name: 'کارگاه رباتیک', capacity: 5, active: 0 });
+  const archived = await f.store.saveEvent({ name: 'رویداد بایگانی', capacity: 5 });
+  await f.store.deleteEvent(archived.id);
+  await f.store.setAdmin(2, 'checkin');
+  await f.store.setAdmin(3, 'admin');
+  const command = (text, id, type = 'private') => handleUpdate(f.message(text, { from: { id }, chat: { id, type } }), f.env, f.store);
+  const click = (data, id) => {
+    const update = f.callback(data);
+    update.callback_query.from.id = id;
+    update.callback_query.message.chat.id = id;
+    return handleUpdate(update, f.env, f.store);
+  };
+  await command('/event_link ' + event.id, 1);
+  await command('/event_link ' + event.id, 2);
+  await click('el:' + event.id, 2);
+  await command('/event_link ' + event.id, 99, 'supergroup');
+  assert.equal(getMe.mock.callCount(), 0);
+  await command('/event_link', 99);
+  await click('el:' + event.id, 99);
+  await command('/event_link ' + event.id, 3);
+  await command('/event_link ' + archived.id, 99);
+  const replies = (await f.store.all("SELECT payload FROM outbox WHERE method='sendMessage' ORDER BY id")).map(row => JSON.parse(row.payload));
+  const choices = replies.flatMap(reply => reply.reply_markup?.inline_keyboard || []).flat();
+  assert.ok(choices.some(button => button.callback_data === 'el:' + event.id));
+  assert.ok(!choices.some(button => button.callback_data === 'el:' + archived.id));
+  const link = 'https://t.me/FumExampleBot?start=getTicket_' + event.id;
+  assert.deepEqual(replies.filter(reply => reply.text.includes(link)).map(reply => reply.chat_id).sort((a, b) => a - b), [3, 99]);
+  assert.equal(choices.filter(button => button.copy_text?.text === link).length, 2);
+  assert.ok(replies.some(reply => reply.text.includes('همین لینک کار می‌کند')));
+  assert.equal(getMe.mock.callCount(), 1);
+});
+
+test('a public event link resumes an existing signup and then opens the same event without reserving', async t => {
+  const f = setup();
+  t.after(() => f.db.close());
+  const event = await f.store.saveEvent({ name: 'کارگاه مسیر‌یابی', capacity: 3 });
+  const other = await f.store.saveEvent({ name: 'کارگاه دیگر', capacity: 3 });
+  await f.send('/start getTicket_' + other.id);
+  assert.equal((await f.store.getState(1)).step, 'signup:first_name');
+  await f.send('علی');
+  await f.send('/start getTicket_' + event.id);
+  assert.equal((await f.store.getState(1)).step, 'signup:last_name');
+  await f.send('محمدی');
+  await handleUpdate(f.message('', { contact: { user_id: 1, phone_number: '09123456789' } }), f.env, f.store);
+  await f.click('s:boy'); await f.click('s:no'); await f.click('s:no'); await f.click('s:no'); await f.click('s:no'); await f.click('s:yes');
+  const state = await f.store.getState(1);
+  assert.equal(state.step, 'reserve_quantity');
+  assert.equal(JSON.parse(state.data_json).event_id, event.id);
+  assert.equal((await f.store.getUser(1)).first_name, 'علی');
+  assert.equal((await f.store.listOrders()).length, 0);
+  await f.send('/start getTicket_' + other.id);
+  assert.equal(JSON.parse((await f.store.getState(1)).data_json).event_id, other.id);
+  await f.send('1');
+  const quote = await f.store.getState(1);
+  await f.click('rq:y:' + JSON.parse(quote.data_json).quote_nonce);
+  assert.equal((await f.store.listOrders())[0].event_id, other.id);
+});
+
+test('event links reject invalid or closed events and handle an event closing during signup', async t => {
+  const f = setup();
+  t.after(() => f.db.close());
+  const event = await f.store.saveEvent({ name: 'کارگاه', capacity: 3 });
+  const closed = await f.store.saveEvent({ name: 'کارگاه بسته', capacity: 3, active: 0 });
+  await f.send('/start getTicket_invalid');
+  await f.send('/start getTicket_99999');
+  await f.send('/start getTicket_' + closed.id);
+  assert.equal(await f.store.getState(1), null);
+  await f.send('/start getTicket_' + event.id);
+  await f.store.deleteEvent(event.id);
+  await f.send('علی');
+  await f.send('محمدی');
+  await handleUpdate(f.message('', { contact: { user_id: 1, phone_number: '09123456789' } }), f.env, f.store);
+  await f.click('s:boy'); await f.click('s:no'); await f.click('s:no'); await f.click('s:no'); await f.click('s:no'); await f.click('s:yes');
+  assert.equal((await f.store.getState(1)).step, 'idle');
+  assert.equal((await f.store.getUser(1)).phone, '09123456789');
+  const replies = (await f.store.all("SELECT payload FROM outbox WHERE method='sendMessage' ORDER BY id")).map(row => JSON.parse(row.payload).text);
+  assert.ok(replies.some(text => text.includes('لینک ثبت‌نام رویداد معتبر نیست')));
+  assert.equal(replies.filter(text => text.includes('ثبت‌نام آن متوقف شده است')).length, 3);
+});
 test('complete signup persists profile and rejects another persons contact', async () => {
   const f = setup(); await f.send('/add_account'); await f.send('علی'); await f.send('محمدی');
   await handleUpdate(f.message('', { contact: { user_id: 2, phone_number: '09123456789' } }), f.env, f.store);

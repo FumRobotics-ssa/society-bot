@@ -8,6 +8,23 @@ const STATUS = { reserved: 'در انتظار رسید', pending: 'در انتظ
 const FACULTIES = ['ادبیات و علوم انسانی', 'الهیات و معارف اسلامی', 'حقوق و علوم سیاسی', 'دامپزشکی', 'علوم', 'علوم اداری و اقتصادی', 'علوم تربیتی و روانشناسی', 'علوم ریاضی', 'علوم ورزشی', 'کشاورزی', 'معماری و شهرسازی', 'منابع طبیعی و محیط زیست', 'مهندسی', 'هنر نیشابور'];
 const YES_NO = [[{ text: 'بله', callback_data: 's:yes' }, { text: 'خیر', callback_data: 's:no' }]];
 const MENU = { keyboard: [[{ text: 'رویدادها' }, { text: 'بلیت‌های من' }], [{ text: 'حساب من' }, { text: 'راهنما' }]], resize_keyboard: true };
+const EVENT_LINK_PREFIX = 'getTicket_';
+const EVENT_LINK_PAGE_SIZE = 20;
+const BOT_USERNAME_CACHE_MS = 60 * 60 * 1000;
+
+let botIdentity;
+async function botUsername(token) {
+  if (!token) throw new Error('BOT_TOKEN is not configured');
+  if (botIdentity?.token === token && botIdentity.expiresAt > Date.now()) return botIdentity.username;
+  const response = await fetch(`https://api.telegram.org/bot${token}/getMe`, { signal: AbortSignal.timeout(10000) });
+  const data = await response.json();
+  const username = data.result?.username;
+  if (!response.ok || !data.ok || typeof username !== 'string' || !/^[A-Za-z0-9_]{5,32}$/.test(username)) {
+    throw new Error('Telegram getMe did not return a valid bot username');
+  }
+  botIdentity = { token, username, expiresAt: Date.now() + BOT_USERNAME_CACHE_MS };
+  return username;
+}
 
 function digits(value = '') {
   return String(value).replace(/[۰-۹٠-٩]/g, c => String(Math.max(FA_DIGITS.indexOf(c), AR_DIGITS.indexOf(c))));
@@ -143,12 +160,50 @@ export async function handleUpdate(update, env, store) {
     if (offset > 0) buttons.push([{ text: 'صفحه قبل', callback_data: `le:${Math.max(0, offset - 20)}` }]);
     await send('برای دیدن جزئیات و دریافت بلیت یک رویداد را انتخاب کنید', { inline_keyboard: buttons });
   };
-  const selectEvent = async eventId => {
-    if (!await needAccount()) return;
-    const pricing = await store.getEventPricing(from.id, positive(eventId), env.FUM_STUDENT_NUMBER_LENGTH);
+  const showEventLinks = async (offset = 0) => {
+    const events = await store.listEventSummaries({ limit: EVENT_LINK_PAGE_SIZE + 1, offset });
+    const buttons = events.slice(0, EVENT_LINK_PAGE_SIZE).map(event => {
+      const title = Array.from(event.name).slice(0, 40).join('');
+      const status = event.active ? 'فعال' : 'غیرفعال';
+      return [{ text: `${title} · ${status} · #${event.id}`, callback_data: `el:${event.id}` }];
+    });
+    if (events.length > EVENT_LINK_PAGE_SIZE) buttons.push([{ text: 'صفحه بعد', callback_data: `elp:${offset + EVENT_LINK_PAGE_SIZE}` }]);
+    if (offset > 0) buttons.push([{ text: 'صفحه قبل', callback_data: `elp:${Math.max(0, offset - EVENT_LINK_PAGE_SIZE)}` }]);
+    if (!buttons.length) return send('رویدادی ثبت نشده است', MENU);
+    return send('رویدادی را که می‌خواهید لینک ثبت‌نامش را بگیرید انتخاب کنید', { inline_keyboard: buttons });
+  };
+  const sendEventLink = async eventId => {
+    const event = await store.getEventSummary(positive(eventId));
+    if (!event) return send('رویداد پیدا نشد یا بایگانی شده است', MENU);
+    const username = await botUsername(env.BOT_TOKEN);
+    const url = `https://t.me/${username}?start=${EVENT_LINK_PREFIX}${event.id}`;
+    const status = event.active ? '' : '\nپس از فعال کردن ثبت‌نام رویداد، همین لینک کار می‌کند.';
+    return send(`لینک ثبت‌نام «${event.name}»\n${url}${status}`, {
+      inline_keyboard: [[{ text: 'کپی لینک ثبت‌نام', copy_text: { text: url } }]],
+    });
+  };
+  const selectEvent = async (eventId, { linked = false, afterSignup = false } = {}) => {
+    const id = positive(eventId);
+    let pricing;
+    try {
+      pricing = await store.getEventPricing(from.id, id, env.FUM_STUDENT_NUMBER_LENGTH, { requirePhone: true });
+    } catch (error) {
+      if (afterSignup && error.code === 'EVENT_INACTIVE') return transition('idle', {}, error.message, MENU);
+      if (error.code !== 'ACCOUNT_REQUIRED') throw error;
+      if (!linked) return send('برای ادامه ابتدا با دستور /add_account ثبت‌نام کنید');
+      const existing = await store.getState(from.id);
+      if (existing?.step.startsWith('signup:')) {
+        return transition(existing.step, { ...stateData(existing), registration_event_id: id },
+          'پس از تکمیل حساب به این رویداد برمی‌گردید. مرحله فعلی ثبت‌نام حساب را ادامه دهید.');
+      }
+      return startSignup(id);
+    }
     const { event } = pricing;
     if (pricing.requires_student_number) return promptFumStudentNumber(event.id);
-    if (pricing.unit_price > 0 && !env.VERIFICATION_CHAT) return send('ثبت‌نام رویدادهای دارای هزینه تا تنظیم گروه بررسی پرداخت متوقف است');
+    if (pricing.unit_price > 0 && !env.VERIFICATION_CHAT) {
+      const message = 'ثبت‌نام رویدادهای دارای هزینه تا تنظیم گروه بررسی پرداخت متوقف است';
+      return afterSignup ? transition('idle', {}, message, MENU) : send(message);
+    }
     const appliedPrice = `تعرفه اعمال‌شده: ${pricingGroupLabel(pricing.pricing_group)}\nقیمت هر بلیت برای شما: ${money(pricing.unit_price)} تومان`;
     const note = pricing.pricing_group === 'fum_student' ? '\nاین تعرفه بر اساس اطلاعات خوداظهاری حساب شماست و از دانشگاه استعلام نمی‌شود.' : '';
     const details = `${eventText(event)}\n${appliedPrice}${note}\n\nتعداد بلیت مورد نظر را وارد کنید\nبرای توقف /cancel را بفرستید`;
@@ -175,6 +230,9 @@ export async function handleUpdate(update, env, store) {
     await send(text, markup);
     await store.setState(from.id, step, { ...data, last_update_id: update.update_id });
   };
+  const startSignup = (eventId = null) => transition('signup:first_name', {
+    profile: {}, username: from.username || '', ...(eventId ? { registration_event_id: eventId } : {}),
+  }, eventId ? 'برای ثبت‌نام در این رویداد ابتدا حساب بسازید.\nنام خود را وارد کنید' : 'نام خود را وارد کنید');
   const promptFumStudentNumber = async (eventId = null) => transition('fum_student_number', { event_id: eventId ? Number(eventId) : null },
     `برای ادامه، شماره دانشجویی ${money(configuredStudentNumberLength(env.FUM_STUDENT_NUMBER_LENGTH))} رقمی خود را وارد کنید. این شماره خوداظهاری است و از سامانه دانشگاه استعلام نمی‌شود.\nبرای توقف /cancel را بفرستید`);
   const saveFumStudentNumber = async (value, data = {}) => {
@@ -220,6 +278,13 @@ export async function handleUpdate(update, env, store) {
         return answer(parts[2] === 'y' ? 'پرداخت تأیید شد' : 'درخواست رد شد');
       }
       if (chat.type !== 'private') return answer('این کار را در گفتگوی خصوصی ربات انجام دهید');
+      const eventLinkAction = /^(el|elp):(\d{1,16})$/.exec(data);
+      if (eventLinkAction) {
+        if (!isAdmin) return answer('دریافت لینک فقط برای مدیر رویداد فعال است');
+        if (eventLinkAction[1] === 'elp') await showEventLinks(Number(eventLinkAction[2]));
+        else await sendEventLink(eventLinkAction[2]);
+        return answer();
+      }
       if (/^(le|ls):\d{1,6}$/.test(data)) {
         const [kind, offset] = data.split(':');
         if (kind === 'le') await showEvents(Number(offset));
@@ -356,7 +421,9 @@ export async function handleUpdate(update, env, store) {
     const command = match[1].toLowerCase();
     const arg = (match[2] || '').trim();
     if (command === 'start') {
-      if (/^getTicket_\d+$/.test(arg)) return selectEvent(arg.slice(10));
+      const eventId = arg.startsWith(EVENT_LINK_PREFIX) ? arg.slice(EVENT_LINK_PREFIX.length) : '';
+      if (/^\d+$/.test(eventId)) return await selectEvent(eventId, { linked: true });
+      if (arg.startsWith(EVENT_LINK_PREFIX)) return send('لینک ثبت‌نام رویداد معتبر نیست', MENU);
       if (arg === 'availableEvents') return showEvents();
       return send('به سامانه ثبت‌نام رویدادها خوش آمدید\nبرای ساخت حساب /add_account و برای دیدن رویدادها /available_events را بفرستید', MENU);
     }
@@ -375,7 +442,7 @@ export async function handleUpdate(update, env, store) {
     if (command === 'add_account') {
       const user = await store.getUser(from.id);
       if (user?.phone) return send('قبلاً ثبت‌نام کرده‌اید\nبرای دیدن اطلاعات /get_account را بفرستید');
-      return transition('signup:first_name', { profile: {}, username: from.username || '' }, 'نام خود را وارد کنید');
+      return startSignup();
     }
     if (command === 'get_account') {
       const user = await needAccount();
@@ -408,6 +475,7 @@ export async function handleUpdate(update, env, store) {
         ['بررسی بلیت', '/get_ticket CODE'],
         ['ثبت ورود', '/attend_ticket CODE'],
         ['فهرست رویدادها', '/get_events'],
+        ['دریافت لینک ثبت‌نام رویداد', '/event_link'],
         ['فهرست مکان‌ها', '/get_places'],
         ['گزارش ظرفیت', '/count_tickets'],
         ['راهنمای افزودن مکان', '/add_place'],
@@ -476,8 +544,12 @@ export async function handleUpdate(update, env, store) {
       return send('مکان حذف شد');
     }
     if (command === 'get_events') {
-      const events = await store.listEvents({ limit: 100 });
+      const events = await store.listEventSummaries();
       return send(events.length ? events.map(e => `${e.id}  ${e.name}  ${e.active ? 'فعال' : 'غیرفعال'}`).join('\n') : 'رویدادی ثبت نشده است');
+    }
+    if (command === 'event_link') {
+      if (!arg) return showEventLinks();
+      return await sendEventLink(arg);
     }
     if (command === 'get_event') {
       const event = await store.getEvent(positive(arg));
@@ -668,6 +740,10 @@ export async function handleUpdate(update, env, store) {
         return store.setState(from.id, 'idle', { last_update_id: update.update_id });
       }
       await store.upsertUser({ id: from.id, username: from.username || d.username, first_name: d.first_name, last_name: d.last_name, phone: d.phone, profile: p });
+      if (d.registration_event_id) {
+        await send('حساب شما ساخته شد', MENU, 'signup_complete');
+        return selectEvent(d.registration_event_id, { afterSignup: true });
+      }
       await send('ثبت‌نام شما انجام شد\nبرای انتخاب رویداد /available_events را بفرستید', MENU);
       return store.setState(from.id, 'idle', { last_update_id: update.update_id });
     }

@@ -208,6 +208,12 @@ export class Store {
   async listEvents({ activeOnly = false, limit = 100, offset = 0 } = {}) {
     return this.all(`${this.eventSelect()} WHERE e.archived=0 ${activeOnly ? 'AND e.active=1' : ''} ORDER BY e.id DESC LIMIT ? OFFSET ?`, ...paging(limit, offset));
   }
+  async listEventSummaries({ limit = 100, offset = 0 } = {}) {
+    return this.all('SELECT id,name,active FROM events WHERE archived=0 ORDER BY id DESC LIMIT ? OFFSET ?', ...paging(limit, offset));
+  }
+  async getEventSummary(id) {
+    return this.one('SELECT id,name,active FROM events WHERE id=? AND archived=0', Number(id));
+  }
   async getEvent(id) { return this.one(`${this.eventSelect()} WHERE e.id=?`, Number(id)); }
   async saveEvent(data, id = null) {
     const old = id ? await this.getEvent(int(id, 'شناسه رویداد')) : null;
@@ -256,11 +262,11 @@ export class Store {
       u.first_name,u.last_name,u.phone,u.username FROM orders o JOIN events e ON e.id=o.event_id
       JOIN users u ON u.id=o.user_id LEFT JOIN places p ON p.id=e.place_id`;
   }
-  async getEventPricing(userId, eventId, exactStudentNumberLength = null) {
+  async getEventPricing(userId, eventId, exactStudentNumberLength = null, { requirePhone = false } = {}) {
     userId = int(userId, 'شناسه کاربر'); eventId = int(eventId, 'شناسه رویداد');
     const [user, event] = await Promise.all([this.getUser(userId), this.getEvent(eventId)]);
-    if (!user) throw domainError('ACCOUNT_REQUIRED', 'ابتدا حساب کاربری بسازید');
     if (!event || !event.active || event.archived) throw domainError('EVENT_INACTIVE', 'این رویداد موجود نیست یا ثبت‌نام آن متوقف شده است');
+    if (!user || (requirePhone && !user.phone)) throw domainError('ACCOUNT_REQUIRED', 'ابتدا حساب کاربری بسازید');
     return { event, ...resolveEventPricing(event, user.profile, configuredStudentNumberLength(exactStudentNumberLength)) };
   }
   async quoteOrder(userId, eventId, quantity, exactStudentNumberLength = null) {
