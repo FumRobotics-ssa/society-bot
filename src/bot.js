@@ -445,7 +445,7 @@ export async function handleUpdate(update, env, store) {
     if (command === 'id') return send(`شناسه تلگرام شما ${from.id}`);
     if (command === 'help') {
       const guide = 'ثبت نام /add_account\nاطلاعات حساب /get_account\nتکمیل شماره دانشجویی فردوسی /complete_student_info\nرویدادها /available_events\nسفارشها و بلیتهای من /my_tickets\nشناسه گفتگو /chatid\nتوقف مرحله جاری /cancel\nحذف اطلاعات حساب /delete_account';
-      if (isAdmin) return send(`${guide}\nپنل مدیریت /admin\nراهنمای مدیر /admin_help`, MENU);
+      if (isAdmin) return send(`${guide}\nپنل مدیریت /admin\nراهنمای مدیر /admin_help\nگرفتن لینک ثبت‌نام رویداد /event_link`, MENU);
       if (isChecker) return send(`${guide}\nپنل پذیرش /admin\nراهنمای پذیرش /checkin_help`, MENU);
       return send(guide, MENU);
     }
@@ -487,10 +487,11 @@ export async function handleUpdate(update, env, store) {
       if (!isAdmin) return send('این دستور موجود نیست یا اجازه اجرای آن را ندارید');
       return send(commandGuide('راهنمای مدیر سامانه', [
         ['پنل مدیریت', '/admin'],
+        ['گرفتن لینک ثبت‌نام با انتخاب رویداد از فهرست', '/event_link'],
+        ['گرفتن لینک ثبت‌نام با شناسهٔ رویداد', '/event_link EVENT_ID'],
         ['بررسی بلیت', '/get_ticket CODE'],
         ['ثبت ورود', '/attend_ticket CODE'],
         ['فهرست رویدادها', '/get_events'],
-        ['دریافت لینک ثبت‌نام رویداد', '/event_link'],
         ['فهرست مکان‌ها', '/get_places'],
         ['گزارش ظرفیت', '/count_tickets'],
         ['راهنمای افزودن مکان', '/add_place'],

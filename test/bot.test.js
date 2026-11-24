@@ -320,6 +320,13 @@ test('admin_help and checkin_help format commands with LTR isolation for authori
   const adminText = messages[messages.length - 1].text;
   assert.match(adminText, /راهنمای مدیر سامانه/);
   assert.match(adminText, /\u2066\/admin\u2069/);
+  assert.match(adminText, /\u2066\/event_link\u2069/);
+  assert.match(adminText, /\u2066\/event_link EVENT_ID\u2069/);
+
+  const adminHelp = f.message('/help', { from: { id: 99 }, chat: { id: 99, type: 'private' } });
+  await handleUpdate(adminHelp, f.env, f.store);
+  const adminHelpReply = await f.store.one('SELECT payload FROM outbox WHERE dedupe_key=?', `update:${adminHelp.update_id}:reply`);
+  assert.match(JSON.parse(adminHelpReply.payload).text, /\/event_link/);
 
   await f.store.setAdmin(2, 'checkin');
   const checkerMsg = f.message('/checkin_help');
@@ -330,6 +337,7 @@ test('admin_help and checkin_help format commands with LTR isolation for authori
   const checkerText = messages[messages.length - 1].text;
   assert.match(checkerText, /راهنمای پذیرش/);
   assert.match(checkerText, /\u2066\/attend_ticket CODE\u2069/);
+  assert.doesNotMatch(checkerText, /\/event_link/);
 
   f.db.close();
 });
