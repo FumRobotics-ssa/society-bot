@@ -85,6 +85,31 @@ test('a public event link resumes an existing signup and then opens the same eve
   assert.equal((await f.store.listOrders())[0].event_id, other.id);
 });
 
+test('remaining event capacity is visible in admin details and hidden in registration messages', async t => {
+  const f = setup();
+  t.after(() => f.db.close());
+  await f.store.upsertUser({ id: 1, phone: '09123456789' });
+  const event = await f.store.saveEvent({ name: 'رویداد متنی', capacity: 7 });
+  const withPoster = await f.store.saveEvent({ name: 'رویداد با پوستر', capacity: 7, poster_url: 'https://example.test/event.jpg' });
+  await f.store.reserve(1, event.id, 1, 'existing-order');
+
+  await f.click(`e:${event.id}`);
+  await f.send(`/start getTicket_${withPoster.id}`);
+  const admin = f.message(`/get_event ${event.id}`, { from: { id: 99 }, chat: { id: 99, type: 'private' } });
+  await handleUpdate(admin, f.env, f.store);
+
+  const replies = (await f.store.all("SELECT payload FROM outbox WHERE method IN ('sendMessage', 'sendPhoto')"))
+    .map(row => JSON.parse(row.payload));
+  const participantReplies = replies.filter(reply => reply.chat_id === 1);
+  assert.equal(participantReplies.length, 2);
+  assert.ok(participantReplies.some(reply => reply.text?.includes(event.name)));
+  assert.ok(participantReplies.some(reply => reply.caption?.includes(withPoster.name)));
+  for (const reply of participantReplies) {
+    assert.doesNotMatch(reply.text || reply.caption, /ظرفیت باقی‌مانده/);
+  }
+  assert.match(replies.find(reply => reply.chat_id === 99).text, /ظرفیت باقی‌مانده: 6/);
+});
+
 test('event links reject invalid or closed events and handle an event closing during signup', async t => {
   const f = setup();
   t.after(() => f.db.close());

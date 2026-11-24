@@ -83,11 +83,26 @@ function eventTime(value) {
   if (Number.isNaN(date.getTime())) return String(value);
   return new Intl.DateTimeFormat('fa-IR', { timeZone: 'Asia/Tehran', calendar: 'persian', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(date);
 }
-function eventText(event) {
+function eventText(event, { showRemainingCapacity = false } = {}) {
   const prices = event.pricing_mode === 'differentiated'
     ? `قیمت هر بلیت — عموم: ${money(event.price)} تومان؛ دانشجوی فردوسی: ${money(event.fum_student_price)} تومان`
     : event.is_paid && Number(event.price) > 0 ? `قیمت هر بلیت: ${money(event.price)} تومان` : 'قیمت: رایگان';
-  return [event.name, event.description || '', `شناسه: ${event.id}`, `مکان: ${event.place_name || 'بدون مکان مشخص'}`, event.address || event.place_address ? `نشانی: ${event.address || event.place_address}` : '', neshanUrl(event.place_map_url) ? `موقعیت در نشان: ${neshanUrl(event.place_map_url)}` : '', `زمان شروع: ${eventTime(event.starts_at)}`, `ظرفیت: ${event.capacity}`, event.remaining != null ? `ظرفیت باقی‌مانده: ${event.remaining}` : '', `سقف بلیت برای هر نفر: ${event.max_per_user}`, prices, `وضعیت: ${event.active ? 'فعال' : 'غیرفعال'}`].filter(Boolean).join('\n');
+  const address = event.address || event.place_address;
+  const mapUrl = neshanUrl(event.place_map_url);
+  return [
+    event.name,
+    event.description,
+    `شناسه: ${event.id}`,
+    `مکان: ${event.place_name || 'بدون مکان مشخص'}`,
+    address ? `نشانی: ${address}` : '',
+    mapUrl ? `موقعیت در نشان: ${mapUrl}` : '',
+    `زمان شروع: ${eventTime(event.starts_at)}`,
+    `ظرفیت: ${event.capacity}`,
+    showRemainingCapacity && event.remaining != null ? `ظرفیت باقی‌مانده: ${event.remaining}` : '',
+    `سقف بلیت برای هر نفر: ${event.max_per_user}`,
+    prices,
+    `وضعیت: ${event.active ? 'فعال' : 'غیرفعال'}`,
+  ].filter(Boolean).join('\n');
 }
 function orderText(order, prefixName = true) {
   const nameLine = prefixName ? `نام رویداد: ${order.event_name || 'رویداد'}\n` : '';
@@ -553,7 +568,7 @@ export async function handleUpdate(update, env, store) {
     }
     if (command === 'get_event') {
       const event = await store.getEvent(positive(arg));
-      return send(event ? eventText(event) : 'رویداد پیدا نشد');
+      return send(event ? eventText(event, { showRemainingCapacity: true }) : 'رویداد پیدا نشد');
     }
     if (command === 'add_event') {
       const parts = arg.split(/\r?\n\s*-\s*\r?\n/).map(x => x.trim());
@@ -565,7 +580,7 @@ export async function handleUpdate(update, env, store) {
       if (!place) return send('مکان پیدا نشد');
       const event = await store.saveEvent({ name: name(parts[0]), description: parts[1], is_paid: paid, max_per_user: positive(parts[3]), place_id: placeId, capacity: place.capacity, price: paid ? positive(parts[5]) : 0, payment_instructions: parts[6] || '', starts_at: parts[7] || '', active: 1 });
       await store.audit(from.id, 'create_event', String(event.id), {});
-      return send(`رویداد ثبت شد\n${eventText(event)}\nلینک ثبت نام را از بخش رویدادها در ربات یا پنل بردارید`);
+      return send(`رویداد ثبت شد\n${eventText(event, { showRemainingCapacity: true })}\nلینک ثبت نام را از بخش رویدادها در ربات یا پنل بردارید`);
     }
     if (command === 'activate_event' || command === 'deactivate_event') {
       const event = await store.getEvent(positive(arg));
