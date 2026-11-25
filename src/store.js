@@ -55,6 +55,15 @@ const int = (v, name, max = Number.MAX_SAFE_INTEGER) => {
   return n;
 };
 const flag = (v) => v === true || v === 1 || v === '1' || v === 'true' ? 1 : 0;
+function questionSettingsValues(data) {
+  if (typeof data?.enabled !== 'boolean') throw domainError('INVALID_INPUT', 'وضعیت دریافت سؤال را مشخص کنید');
+  const closesAt = data.closes_at == null ? null : int(data.closes_at, 'مهلت ارسال سؤال', 253402300799);
+  const maxQuestions = data.max_questions == null ? null : int(data.max_questions, 'سقف سؤال هر نفر', 3);
+  if (data.enabled && (!closesAt || closesAt <= Math.floor(Date.now() / 1000))) {
+    throw domainError('INVALID_INPUT', 'برای فعال کردن دریافت سؤال، مهلتی در آینده انتخاب کنید');
+  }
+  return [Number(data.enabled), closesAt, maxQuestions];
+}
 const string = (v, name, max, required = false) => {
   if (v != null && typeof v !== 'string') throw domainError('INVALID_INPUT', `${name} معتبر نیست`);
   const result = (v || '').trim();
@@ -239,11 +248,14 @@ export class Store {
       GROUP BY o.event_id
     )
     SELECT e.*,p.name AS place_name,p.address AS place_address,p.map_url AS place_map_url,
+      COALESCE(s.enabled,0) AS questions_enabled,s.closes_at AS questions_closes_at,
+      COALESCE(s.max_questions,3) AS questions_max,
       COALESCE(r.occupied,0) AS occupied, e.capacity-COALESCE(r.occupied,0) AS remaining,
       COALESCE(r.registered_users,0) AS registered_users, COALESCE(r.approved_tickets,0) AS approved_tickets,
       COALESCE(r.occupied-r.approved_tickets,0) AS held_tickets, COALESCE(a.checked_in_tickets,0) AS checked_in_tickets
     FROM page e
     LEFT JOIN places p ON p.id=e.place_id
+    LEFT JOIN event_question_settings s ON s.event_id=e.id
     LEFT JOIN reservations r ON r.event_id=e.id
     LEFT JOIN attendance a ON a.event_id=e.id
     ORDER BY e.id DESC`, ...paging(limit, offset));
@@ -282,14 +294,27 @@ export class Store {
     const values = [string(v.name, 'نام رویداد', 200, true), string(v.description, 'توضیحات', 3500), placeId, capacity,
       int(v.max_per_user, 'سقف هر نفر', 100), paid, price, pricingMode, fumStudentPrice,
       string(v.payment_instructions, 'دستور پرداخت', 1500), startsAt, posterUrl, flag(v.active)];
-    if (id) await this.run(`UPDATE events SET name=?,description=?,place_id=?,capacity=?,max_per_user=?,is_paid=?,price=?,
-      pricing_mode=?,fum_student_price=?,payment_instructions=?,starts_at=?,poster_url=?,active=?,updated_at=unixepoch() WHERE id=?`, ...values, Number(id));
-    else {
-      const r = await this.run(`INSERT INTO events(name,description,place_id,capacity,max_per_user,is_paid,price,pricing_mode,fum_student_price,payment_instructions,starts_at,poster_url,active)
+    const settings = data.question_settings === undefined ? null : questionSettingsValues(data.question_settings);
+    const event = id
+      ? this.stmt(`UPDATE events SET name=?,description=?,place_id=?,capacity=?,max_per_user=?,is_paid=?,price=?,
+        pricing_mode=?,fum_student_price=?,payment_instructions=?,starts_at=?,poster_url=?,active=?,updated_at=unixepoch()
+        WHERE id=?${settings ? ' AND archived=0' : ''}`, ...values, Number(id))
+      : this.stmt(`INSERT INTO events(name,description,place_id,capacity,max_per_user,is_paid,price,pricing_mode,fum_student_price,payment_instructions,starts_at,poster_url,active)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, ...values);
-      id = r.meta.last_row_id;
-    }
-    return this.getEvent(id);
+    let saved, savedSettings;
+    try {
+      if (settings) {
+        // On create, the second statement uses the id inserted by the first in the same transaction.
+        const [eventResult, questionResult] = await this.db.batch([event, this.eventQuestionSettingsStatement(id, settings)]);
+        saved = eventResult;
+        savedSettings = questionResult.results[0];
+      } else {
+        saved = await event.run();
+      }
+    } catch (error) { throw mapDbError(error); }
+    if (settings && !savedSettings) throw domainError('NOT_FOUND', 'رویداد پیدا نشد');
+    const item = await this.getEvent(id || saved.meta.last_row_id);
+    return savedSettings ? { ...item, question_settings: savedSettings } : item;
   }
   async deleteEvent(id) {
     await this.run('UPDATE events SET archived=1,active=0,updated_at=unixepoch() WHERE id=?', int(id, 'شناسه رویداد'));
@@ -303,19 +328,16 @@ export class Store {
     if (!settings) throw domainError('NOT_FOUND', 'رویداد پیدا نشد');
     return settings;
   }
-  async saveEventQuestionSettings(eventId, data) {
-    const id = int(eventId, 'شناسه رویداد');
-    const enabled = flag(data.enabled);
-    const closesAt = data.closes_at == null ? null : int(data.closes_at, 'مهلت ارسال سؤال', 253402300799);
-    const maxQuestions = data.max_questions == null ? null : int(data.max_questions, 'سقف سؤال هر نفر', 3);
-    if (enabled && (!closesAt || closesAt <= Math.floor(Date.now() / 1000))) {
-      throw domainError('INVALID_INPUT', 'برای فعال کردن دریافت سؤال، مهلتی در آینده انتخاب کنید');
-    }
-    const settings = await this.one(`INSERT INTO event_question_settings(event_id,enabled,closes_at,max_questions)
-      SELECT id,?,?,COALESCE(?,3) FROM events WHERE id=? AND archived=0
+  eventQuestionSettingsStatement(eventId, [enabled, closesAt, maxQuestions]) {
+    return this.stmt(`INSERT INTO event_question_settings(event_id,enabled,closes_at,max_questions)
+      SELECT id,?,?,COALESCE(?,3) FROM events WHERE id=${eventId ? '?' : 'last_insert_rowid()'} AND archived=0
       ON CONFLICT(event_id) DO UPDATE SET enabled=excluded.enabled,closes_at=excluded.closes_at,
         max_questions=COALESCE(?,event_question_settings.max_questions)
-      RETURNING enabled,closes_at,max_questions`, enabled, closesAt, maxQuestions, id, maxQuestions);
+      RETURNING enabled,closes_at,max_questions`, enabled, closesAt, maxQuestions,
+      ...(eventId ? [Number(eventId)] : []), maxQuestions);
+  }
+  async saveEventQuestionSettings(eventId, data) {
+    const settings = await this.eventQuestionSettingsStatement(int(eventId, 'شناسه رویداد'), questionSettingsValues(data)).first();
     if (!settings) throw domainError('NOT_FOUND', 'رویداد پیدا نشد');
     return settings;
   }

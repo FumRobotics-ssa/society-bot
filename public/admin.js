@@ -324,7 +324,7 @@ function eventCard(event, editable) {
     actions.append(button('ویرایش', () => editEvent(event)), button(yes(event.active) ? 'توقف رزرو' : 'فعال کردن رزرو', async () => { await api('/api/events/' + encodeURIComponent(event.id), { method: 'PATCH', body: { active: !yes(event.active) } }); await load(); toast('وضعیت رزرو به‌روز شد'); }));
     actions.append(button('حذف', async () => { if (!confirm('این رویداد حذف شود؟ سوابق سفارش‌ها باید در سرور حفظ شوند')) return; await api('/api/events/' + encodeURIComponent(event.id), { method: 'DELETE' }); await load(); toast('رویداد حذف شد'); }, 'button danger small'));
   } else actions.append(button('مشاهده بلیت‌ها', async () => { await navigate('tickets'); $('tickets-event').value = event.id; await load(); }));
-  actions.append(button('پرسش‌های رویداد', () => openEventQuestions(event)));
+  actions.append(button('بررسی پرسش‌ها', () => openEventQuestions(event)));
   card.append(actions); return card;
 }
 const QUESTION_PAGE_SIZE = 25;
@@ -366,21 +366,11 @@ function renderEventQuestions(eventId, page, offset, status) {
   pager.append(previous, next);
   container.append(pager);
 }
-async function loadEventQuestions(eventId, offset = 0, configure = false) {
+async function loadEventQuestions(eventId, offset = 0) {
   const status = $('questions-filter').value;
   const page = await api(query(questionApi(eventId), { limit: QUESTION_PAGE_SIZE, offset, status }));
   const dialog = $('questions-dialog');
   if (!dialog.open || dialog.dataset.eventId !== String(eventId)) return;
-  if (configure) {
-    $('questions-enabled').checked = yes(page.enabled);
-    $('questions-max').value = String(page.max_questions);
-    if (page.closes_at) {
-      const local = tehranDateTime(Number(page.closes_at) * 1000);
-      $('questions-date').value = formatJalaliDate(local);
-      $('questions-time').value = persianNumber(`${String(local.hour).padStart(2, '0')}:${String(local.minute).padStart(2, '0')}`);
-    }
-    $('question-settings-fields').disabled = false;
-  }
   if ($('questions-filter').value !== status) return;
   if (!page.items.length && offset) return loadEventQuestions(eventId, offset - QUESTION_PAGE_SIZE);
   renderEventQuestions(eventId, page, offset, status);
@@ -389,13 +379,11 @@ async function openEventQuestions(event) {
   const dialog = $('questions-dialog');
   dialog.dataset.eventId = event.id;
   $('questions-title').textContent = `پرسش‌های «${event.name}»`;
-  $('question-settings-form').reset();
   $('questions-filter').value = 'pending';
-  $('question-settings-fields').disabled = true;
   $('question-list').replaceChildren(el('p', 'در حال دریافت سؤال‌ها', 'muted'));
   $('questions-download').href = `${questionApi(event.id)}/export`;
   dialog.showModal();
-  await questionFeedback(() => loadEventQuestions(event.id, 0, true));
+  await questionFeedback(() => loadEventQuestions(event.id));
 }
 async function showOverview() {
   const stats = await api('/api/stats');
@@ -408,6 +396,17 @@ async function showOverview() {
 function showEvents() {
   if (!state.events.length) empty($('events-list'), 'رویدادی ثبت نشده', 'با دکمه رویداد جدید شروع کنید');
   else $('events-list').replaceChildren(...state.events.map((event) => eventCard(event, true)));
+}
+function readQuestionFields() {
+  return {
+    enabled: $('questions-enabled').checked,
+    day: $('questions-date').value.trim(),
+    time: $('questions-time').value.trim(),
+    maxQuestions: Number($('questions-max').value),
+  };
+}
+function toggleQuestionFields() {
+  $('questions-options').hidden = !$('questions-enabled').checked;
 }
 function editEvent(event = null) {
   const form = $('event-form'); form.reset();
@@ -434,8 +433,16 @@ function editEvent(event = null) {
   }
   updateEventPricingFields();
   const when = event?.starts_at ? tehranDateTime(event.starts_at) : null;
+  form.dataset.requiresStart = String(!event || Boolean(when));
   $('event-jalali-date').value = when ? formatJalaliDate(when) : '';
   form.elements.namedItem('starts_at_time').value = when ? persianNumber(`${String(when.hour).padStart(2, '0')}:${String(when.minute).padStart(2, '0')}`) : '';
+  const deadline = event?.questions_closes_at ? tehranDateTime(event.questions_closes_at * 1000) : null;
+  $('questions-enabled').checked = yes(event?.questions_enabled);
+  $('questions-date').value = deadline ? formatJalaliDate(deadline) : '';
+  $('questions-time').value = deadline ? persianNumber(`${String(deadline.hour).padStart(2, '0')}:${String(deadline.minute).padStart(2, '0')}`) : '';
+  $('questions-max').value = event?.questions_max ?? 3;
+  toggleQuestionFields();
+  form.dataset.questionFields = JSON.stringify(readQuestionFields());
   form.hidden = false; form.scrollIntoView({ behavior: 'smooth', block: 'start' }); form.elements.namedItem('name').focus();
 }
 function updateEventPricingFields() {
@@ -604,20 +611,7 @@ $('retry-session').addEventListener('click', () => action($('retry-session'), se
 $('logout').addEventListener('click', () => action($('logout'), async () => { await api('/api/logout', { method: 'POST' }); state.me = null; showLogin('از حساب خارج شدید برای ورود دوباره لینک تازه بگیرید'); }));
 $('new-event').addEventListener('click', () => editEvent());
 $('cancel-event').addEventListener('click', () => { $('event-form').hidden = true; });
-$('question-settings-form').addEventListener('submit', (event) => {
-  event.preventDefault();
-  const id = $('questions-dialog').dataset.eventId;
-  action(event.submitter, () => questionFeedback(async () => {
-    const enabled = $('questions-enabled').checked;
-    const day = $('questions-date').value.trim();
-    const time = $('questions-time').value.trim();
-    const maxQuestions = Number($('questions-max').value);
-    if ((enabled || time) && !day) throw new Error('تاریخ پایان دریافت سؤال را انتخاب کنید');
-    const closesAt = day ? Date.parse(jalaliTimeToIso(parseJalaliDate(day), time || '23:59')) / 1000 : null;
-    await api(questionApi(id), { method: 'PATCH', body: { enabled, closes_at: closesAt, max_questions: maxQuestions } });
-    if (day && !time) $('questions-time').value = '۲۳:۵۹';
-  }, 'تنظیمات دریافت سؤال ذخیره شد'));
-});
+$('questions-enabled').addEventListener('change', toggleQuestionFields);
 $('questions-filter').addEventListener('change', () => questionFeedback(() => loadEventQuestions($('questions-dialog').dataset.eventId)));
 connectPicker('event-jalali-date', 'jalali-open', openJalaliCalendar);
 connectPicker('event-start-time', 'time-open', openTimePicker);
@@ -654,8 +648,11 @@ $('event-form').addEventListener('submit', (event) => {
   event.preventDefault(); const form = event.currentTarget; const values = new FormData(form);
   action(event.submitter, async () => {
     const id = values.get('id');
-    const chosenDate = parseJalaliDate(values.get('starts_at_jalali'));
-    const startsAt = jalaliTimeToIso(chosenDate, values.get('starts_at_time'));
+    const startDay = values.get('starts_at_jalali');
+    const startTime = values.get('starts_at_time');
+    const startsAt = form.dataset.requiresStart === 'true' || startDay || startTime
+      ? jalaliTimeToIso(parseJalaliDate(startDay), startTime)
+      : '';
     const pricingMode = values.get('pricing_mode') || 'fixed';
     const fixedPaid = values.has('is_paid');
     const publicPrice = pricingMode === 'differentiated' ? Number(values.get('public_price')) : fixedPaid ? Number(values.get('price')) : 0;
@@ -663,6 +660,13 @@ $('event-form').addEventListener('submit', (event) => {
     const isPaid = pricingMode === 'differentiated' ? publicPrice > 0 || studentPrice > 0 : fixedPaid;
     const posterUrl = values.get('poster_url') || '';
     const body = { name: values.get('name').trim(), description: values.get('description').trim(), place_id: values.get('place_id') ? Number(values.get('place_id')) : null, capacity: Number(values.get('capacity')), max_per_user: Number(values.get('max_per_user')), price: publicPrice, fum_student_price: studentPrice, pricing_mode: pricingMode, poster_url: posterUrl, payment_instructions: values.get('payment_instructions').trim(), starts_at: startsAt, is_paid: isPaid, active: values.has('active') };
+    const questionFields = readQuestionFields();
+    if (JSON.stringify(questionFields) !== form.dataset.questionFields) {
+      const { enabled, day, time, maxQuestions } = questionFields;
+      if (enabled && !day) throw new Error('تاریخ پایان دریافت سؤال را انتخاب کنید');
+      const closesAt = day ? Date.parse(jalaliTimeToIso(parseJalaliDate(day), time || '23:59')) / 1000 : null;
+      body.question_settings = { enabled, closes_at: closesAt, max_questions: maxQuestions };
+    }
     await api('/api/events' + (id ? '/' + encodeURIComponent(id) : ''), { method: id ? 'PATCH' : 'POST', body });
     form.hidden = true; await load(); toast('رویداد ذخیره شد');
   });
