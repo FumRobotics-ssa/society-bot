@@ -205,7 +205,7 @@ test('free reservation auto-issues a ticket without requesting a receipt', async
   const messages = (await f.db.prepare("SELECT payload FROM outbox WHERE method='sendMessage'").all()).results.map(row => JSON.parse(row.payload));
   const ticketLink = messages.flatMap(message => message.reply_markup?.inline_keyboard || []).flat().find(button => button.text === 'بلیت');
   assert.ok(ticketLink, 'Button text should be بلیت');
-  assert.ok(messages.some(m => m.text && m.text.startsWith('نام رویداد: ')), 'Message should start with event name');
+  assert.ok(messages.some(m => /^🎫 نام رویداد: [^\n]+\n✅ ثبت‌نام شما تأیید شد\.\n\n/.test(m.text)), 'Ticket notice should lead with the event and confirmation');
   assert.match(ticketLink.url, /^https:\/\/robotics-society\.fum-robotics-ssa\.workers\.dev\/ticket\/[0-9a-f]{64}$/);
   f.db.close();
 });
@@ -213,12 +213,16 @@ test('free reservation auto-issues a ticket without requesting a receipt', async
 test('paid reserve receipt owner approval and retried update preserve one order', async () => {
   const f = setup(); await f.store.upsertUser({ id: 1, phone: '09123456789', first_name: 'علی' });
   const place = await f.store.savePlace({ name: 'سالن', capacity: 2, map_url: 'https://nshn.ir/example' });
-  const event = await f.store.saveEvent({ name: 'نمایش', place_id: place.id, capacity: 2, is_paid: 1, price: 50000 });
+  const event = await f.store.saveEvent({ name: 'نمایش', place_id: place.id, capacity: 2, is_paid: 1, price: 50000, payment_instructions: 'راهنمای نمونهٔ واریز' });
   await f.click('e:' + event.id); const booking = f.message('1');
   await handleUpdate(booking, f.env, f.store); await handleUpdate(booking, f.env, f.store);
   const quoteState = await f.store.getState(1);
   await f.click(`rq:y:${JSON.parse(quoteState.data_json).quote_nonce}`);
   assert.equal((await f.store.listOrders()).length, 1);
+  const payment = await f.store.one("SELECT payload FROM outbox WHERE method='sendMessage' ORDER BY rowid DESC LIMIT 1");
+  const paymentText = JSON.parse(payment.payload).text;
+  assert.match(paymentText, /مبلغ کل: ۵۰٬۰۰۰ تومان\n\n💳 راهنمای واریز\nراهنمای نمونهٔ واریز\n\n⏳ مهلت ارسال رسید:/);
+  assert.match(paymentText, /\n\nرسید واریز را به‌صورت عکس یا فایل PDF همین‌جا بفرستید\./);
   const receipt = f.message('', { photo: [{ file_id: 'safe-photo', file_size: 1000 }] }); await handleUpdate(receipt, f.env, f.store);
   const receiptPayload = (await f.db.prepare("SELECT payload FROM outbox WHERE method='sendPhoto'").first()).payload;
   assert.ok(receiptPayload.includes('تأیید پرداخت') && receiptPayload.includes('رد درخواست'));
@@ -248,7 +252,7 @@ test('receipt review shows the saved self-reported tariff and previously approve
   const caption = JSON.parse(sent[0].payload).caption;
   assert.match(caption, /گروه تعرفه هنگام سفارش: تعرفهٔ دانشجوی فردوسی \(بر اساس خوداظهاری\)/);
   assert.match(caption, /تعداد بلیت درخواستی: 1/);
-  assert.match(caption, /تعداد بلیت‌های قبلا خریداری شده: 1/);
+  assert.match(caption, /تعداد بلیت‌های قبلاً خریداری‌شده: 1/);
   assert.match(caption, /نام رویداد: نمایش/);
   assert.match(caption, /مبلغ هر بلیت مورد انتظار: ۲۵٬۰۰۰ تومان/);
   assert.match(caption, /مبلغ کل مورد انتظار: ۲۵٬۰۰۰ تومان/);
@@ -413,4 +417,29 @@ test('bot displays poster as photo when event has poster and as text when no pos
   assert.match(photoPayload.caption, /تعداد بلیت مورد نظر را وارد کنید/);
 
   f.db.close();
+});
+
+test('long poster details preserve the description, venue and booking instructions', async t => {
+  const f = setup();
+  t.after(() => f.db.close());
+  await f.store.upsertUser({ id: 1, phone: '09123456789', first_name: 'علی' });
+  const place = await f.store.savePlace({ name: 'تالار', address: 'نشانی '.repeat(140).trim(), capacity: 10 });
+  const description = 'توضیحات رویداد '.repeat(220) + 'پایان توضیحات';
+  const event = await f.store.saveEvent({
+    name: 'کارگاه با توضیحات بلند', description, place_id: place.id, capacity: 10, poster_url: 'https://example.test/poster.jpg',
+  });
+  await f.store.reserve(1, event.id, 1, 'registered');
+  await f.store.saveEventQuestionSettings(event.id, { enabled: true, closes_at: Math.floor(Date.now() / 1000) + 3600 });
+  await f.click(`e:${event.id}`);
+
+  const rows = await f.store.all("SELECT method,payload FROM outbox WHERE method IN ('sendPhoto','sendMessage') ORDER BY rowid");
+  const [poster, intro, booking] = rows.map(row => JSON.parse(row.payload));
+  assert.deepEqual(rows.map(row => row.method), ['sendPhoto', 'sendMessage', 'sendMessage']);
+  assert.equal(poster.caption, `📅 ${event.name}`);
+  assert.ok(intro.text.endsWith(description));
+  assert.ok(booking.text.includes(place.address));
+  assert.match(booking.text, /\n\nتعداد بلیت مورد نظر را وارد کنید\.\nبرای انصراف، \/cancel/);
+  assert.doesNotMatch(booking.text, /ظرفیت باقی‌مانده/);
+  assert.equal(booking.reply_markup.inline_keyboard[0][0].callback_data, `eq:${event.id}`);
+  assert.equal((await f.store.getState(1)).step, 'reserve_quantity');
 });
