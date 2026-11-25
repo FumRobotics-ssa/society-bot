@@ -109,6 +109,48 @@ test('remaining event capacity is visible in admin details and hidden in registr
   }
   assert.match(replies.find(reply => reply.chat_id === 99).text, /ظرفیت باقی‌مانده: 6/);
 });
+test('registered attendees can submit a private question once per update and resume their prior step', async t => {
+  const f = setup();
+  t.after(() => f.db.close());
+  await f.store.upsertUser({ id: 1, phone: '09123456789' });
+  await f.store.upsertUser({ id: 2, phone: '09123456780' });
+  const event = await f.store.saveEvent({ name: 'نشست گفت‌وگو', capacity: 6, max_per_user: 2 });
+  const booking = await f.store.reserve(1, event.id, 1, 'registered');
+  await f.store.saveEventQuestionSettings(event.id, { enabled: true, closes_at: Math.floor(Date.now() / 1000) + 3600 });
+
+  const outsider = f.callback(`eq:${event.id}`);
+  outsider.callback_query.from.id = 2;
+  outsider.callback_query.message.chat.id = 2;
+  await handleUpdate(outsider, f.env, f.store);
+  assert.equal(await f.store.getState(2), null);
+  await f.click(`e:${event.id}`);
+  assert.equal((await f.store.getState(1)).step, 'reserve_quantity');
+  const offered = await f.store.one("SELECT payload FROM outbox WHERE payload LIKE '%پرسش از مهمان%' AND method='sendMessage'");
+  assert.ok(JSON.parse(offered.payload).reply_markup.inline_keyboard.flat().some(button => button.callback_data === `eq:${event.id}`));
+
+  await f.click(`eq:${event.id}`);
+  assert.equal((await f.store.getState(1)).step, 'event_question');
+  const question = f.message('مسیر ورود به صنعت رباتیک چیست؟');
+  await handleUpdate(question, f.env, f.store);
+  await handleUpdate(question, f.env, f.store);
+  assert.equal((await f.store.getState(1)).step, 'reserve_quantity');
+  const items = await f.store.listEventQuestions(event.id);
+  assert.deepEqual(items.map(item => item.question), [question.message.text]);
+  const confirmation = await f.store.one('SELECT payload FROM outbox WHERE dedupe_key=?', `update:${question.update_id}:reply`);
+  assert.match(JSON.parse(confirmation.payload).text, /سؤالت ثبت شد/);
+
+  await f.store.saveEvent({ active: 0 }, event.id);
+  await f.click(`o:${booking.order.id}`);
+  assert.ok(await f.store.one("SELECT payload FROM outbox WHERE dedupe_key LIKE '%:view:approved:0' AND payload LIKE '%پرسش از مهمان%'"));
+  await f.click(`eq:${event.id}`);
+  await f.send('/cancel');
+  assert.equal((await f.store.getState(1)).step, 'reserve_quantity');
+  await f.click(`eq:${event.id}`);
+  await f.db.prepare('UPDATE event_question_settings SET closes_at=unixepoch()-1 WHERE event_id=?').bind(event.id).run();
+  await f.send('این سؤال بعد از مهلت فرستاده شده است');
+  assert.equal((await f.store.listEventQuestions(event.id)).length, 1);
+  assert.equal((await f.store.getState(1)).step, 'reserve_quantity');
+});
 
 test('event links reject invalid or closed events and handle an event closing during signup', async t => {
   const f = setup();

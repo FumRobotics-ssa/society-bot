@@ -10,6 +10,7 @@ const YES_NO = [[{ text: 'بله', callback_data: 's:yes' }, { text: 'خیر', c
 const MENU = { keyboard: [[{ text: 'رویدادها' }, { text: 'بلیت‌های من' }], [{ text: 'حساب من' }, { text: 'راهنما' }]], resize_keyboard: true };
 const EVENT_LINK_PREFIX = 'getTicket_';
 const EVENT_LINK_PAGE_SIZE = 20;
+const eventQuestionButton = eventId => ({ text: 'پرسش از مهمان', callback_data: `eq:${eventId}` });
 const BOT_USERNAME_CACHE_MS = 60 * 60 * 1000;
 
 let botIdentity;
@@ -131,6 +132,7 @@ export async function notifyOrder(order, env, store, key = `order:${order.id}`) 
       { text: tickets.length === 1 ? 'بلیت' : `بلیت ${start + i + 1}`, url: link(env, `/ticket/${ticket.token}`) }
     ]);
     if (mapUrl) ticketButtons.push([{ text: 'موقعیت مکان در نشان', url: mapUrl }]);
+    if (start === 0 && order.questions_open) ticketButtons.push([eventQuestionButton(order.event_id)]);
     await store.enqueue('sendMessage', {
       chat_id: order.user_id,
       text: `${eventHeader}ثبت نام شما تأیید شد\n${orderText(order, false)}\nبرای مشاهده بلیت و کد QR دکمه‌های زیر را باز کنید`,
@@ -222,13 +224,15 @@ export async function handleUpdate(update, env, store) {
     const appliedPrice = `تعرفه اعمال‌شده: ${pricingGroupLabel(pricing.pricing_group)}\nقیمت هر بلیت برای شما: ${money(pricing.unit_price)} تومان`;
     const note = pricing.pricing_group === 'fum_student' ? '\nاین تعرفه بر اساس اطلاعات خوداظهاری حساب شماست و از دانشگاه استعلام نمی‌شود.' : '';
     const details = `${eventText(event)}\n${appliedPrice}${note}\n\nتعداد بلیت مورد نظر را وارد کنید\nبرای توقف /cancel را بفرستید`;
+    const markup = event.questions_open && await store.getEventQuestionAccess(event.id, from.id)
+      ? { inline_keyboard: [[eventQuestionButton(event.id)]] } : undefined;
     if (event.poster_url) {
       const poster = /^https?:\/\//i.test(event.poster_url)
         ? event.poster_url
         : `${(env.PUBLIC_URL || '').replace(/\/$/, '')}/api/events/${event.id}/poster`;
-      await sendPhoto(poster, details);
+      await sendPhoto(poster, details, markup);
     } else {
-      await send(details);
+      await send(details, markup);
     }
     await store.setState(from.id, 'reserve_quantity', { event_id: event.id, last_update_id: update.update_id });
   };
@@ -245,6 +249,7 @@ export async function handleUpdate(update, env, store) {
     await send(text, markup);
     await store.setState(from.id, step, { ...data, last_update_id: update.update_id });
   };
+  const finishQuestion = (data, text) => transition(data.resume?.step || 'idle', data.resume?.data || {}, text, MENU);
   const startSignup = (eventId = null) => transition('signup:first_name', {
     profile: {}, username: from.username || '', ...(eventId ? { registration_event_id: eventId } : {}),
   }, eventId ? 'برای ثبت‌نام در این رویداد ابتدا حساب بسازید.\nنام خود را وارد کنید' : 'نام خود را وارد کنید');
@@ -293,6 +298,19 @@ export async function handleUpdate(update, env, store) {
         return answer(parts[2] === 'y' ? 'پرداخت تأیید شد' : 'درخواست رد شد');
       }
       if (chat.type !== 'private') return answer('این کار را در گفتگوی خصوصی ربات انجام دهید');
+      const question = /^eq:(\d{1,16})$/.exec(data);
+      if (question) {
+        const eventId = positive(question[1]);
+        const access = await store.getEventQuestionAccess(eventId, from.id);
+        if (!access) return answer('ارسال سؤال بسته است یا ثبت‌نام شما در این رویداد تأیید نشده است');
+        const state = await store.getState(from.id);
+        const previous = stateData(state);
+        const resume = state?.step === 'event_question' ? previous.resume
+          : state ? { step: state.step, data: previous } : null;
+        await transition('event_question', { event_id: eventId, resume },
+          `سؤال خود را برای مهمان رویداد «${access.name}» در یک پیام متنی بفرستید. حداکثر ۱۰۰۰ نویسه\nبرای انصراف /cancel را بفرستید`);
+        return answer();
+      }
       const eventLinkAction = /^(el|elp):(\d{1,16})$/.exec(data);
       if (eventLinkAction) {
         if (!isAdmin) return answer('دریافت لینک فقط برای مدیر رویداد فعال است');
@@ -388,6 +406,16 @@ export async function handleUpdate(update, env, store) {
       if (state) {
         const data = stateData(state);
         if (data.last_update_id === update.update_id) return;
+        if (state.step === 'event_question') {
+          if (!rawText || rawText.length > 1000) return send('سؤال را به‌صورت متن و در حداکثر ۱۰۰۰ نویسه بفرستید');
+          try {
+            await store.submitEventQuestion(data.event_id, from.id, rawText, `${updateKey}:event-question`);
+          } catch (error) {
+            if (error.code !== 'QUESTION_UNAVAILABLE') throw error;
+            return finishQuestion(data, error.message);
+          }
+          return finishQuestion(data, 'سؤالت ثبت شد و برای بررسی در اختیار تیم برگزارکننده قرار گرفت');
+        }
         if (String(state.step).startsWith('signup:')) return await signupStep(state.step.slice(7), text, data, false);
         if (state.step === 'fum_student_number') return await saveFumStudentNumber(text, data);
         if (state.step === 'reserve_quantity') {
@@ -450,6 +478,8 @@ export async function handleUpdate(update, env, store) {
       return send(guide, MENU);
     }
     if (command === 'cancel') {
+      const state = await store.getState(from.id);
+      if (state?.step === 'event_question') return finishQuestion(stateData(state), 'ارسال سؤال لغو شد');
       await send('مرحله جاری متوقف شد\nبرای لغو رزرو از بخش بلیتهای من وارد سفارش شوید', MENU);
       await store.clearState(from.id);
       return;

@@ -139,6 +139,42 @@ async function api(request, env, store, url) {
     return json({ ...stats, ...jobs });
   }
   if (path === '/api/events' && method === 'GET') return json(await store.listEventsWithRegistrationStats(pagination(url)));
+  const questions = path.match(/^\/api\/events\/(\d+)\/questions(?:\/(export|\d+))?$/);
+  if (questions) {
+    const eventId = Number(questions[1]);
+    const target = questions[2];
+    if (method === 'GET' && !target) {
+      const { limit, offset } = pagination(url);
+      const [settings, items] = await Promise.all([
+        store.getEventQuestionSettings(eventId),
+        store.listEventQuestions(eventId, { limit: limit + 1, offset }),
+      ]);
+      return json({ ...settings, items: items.slice(0, limit), has_more: items.length > limit });
+    }
+    if (method === 'PATCH' && !target) {
+      const data = await body(request, 2048);
+      if (typeof data?.enabled !== 'boolean') fail('وضعیت دریافت سؤال را مشخص کنید');
+      const settings = await store.saveEventQuestionSettings(eventId, data);
+      await store.audit(session.user_id, 'event.questions.configure', eventId, settings);
+      return json(settings);
+    }
+    if (method === 'PATCH' && target && target !== 'export') {
+      const data = await body(request, 2048);
+      if (typeof data?.selected !== 'boolean') fail('وضعیت انتخاب سؤال را مشخص کنید');
+      await store.selectEventQuestion(eventId, Number(target), data);
+      await store.audit(session.user_id, 'event.questions.select', eventId, { question_id: Number(target), selected: data.selected });
+      return json({ ok: true });
+    }
+    if (method === 'GET' && target === 'export') {
+      const [settings, selected] = await Promise.all([store.getEventQuestionSettings(eventId), store.selectedEventQuestions(eventId)]);
+      const numbers = new Intl.NumberFormat('fa-IR');
+      const entries = selected.map(({ topic, question }, index) => `${numbers.format(index + 1)}. ${topic ? `${topic}\n` : ''}${question}`);
+      const content = [`سؤال‌های منتخب «${settings.name}»`, ...entries].join('\r\n\r\n');
+      await store.audit(session.user_id, 'event.questions.export', eventId, { count: selected.length });
+      return download('\uFEFF' + content, `event-${eventId}-questions.txt`, 'text/plain;charset=utf-8');
+    }
+    fail('مسیر پیدا نشد', 404);
+  }
   if (path === '/api/audience-events' && method === 'GET') return json(await store.listAudienceEvents(pagination(url)));
   if (path === '/api/places' && method === 'GET') return json(await store.listPlaces());
   if (path === '/api/events' && method === 'POST') { const item = await store.saveEvent(await body(request)); await store.audit(session.user_id, 'event.create', item.id, {}); return json(item, 201); }
@@ -190,7 +226,7 @@ async function api(request, env, store, url) {
   if (path === '/api/expire' && method === 'POST') { await store.expireOrders(); return json({ ok: true }); }
   if (path === '/api/backup' && method === 'GET') {
     await store.audit(session.user_id, 'backup.export', 'database', {});
-    return download(await exportBackup(env), `robotics-society-${new Date().toISOString().slice(0, 10)}.json`, 'application/json');
+    return download(await exportBackup(env, { includeEventQuestions: true }), `robotics-society-${new Date().toISOString().slice(0, 10)}.json`, 'application/json');
   }
   if (path.startsWith('/api/admins')) {
     if (session.role !== 'owner') fail('فقط مالک میتواند دسترسی مدیران را تغییر دهد', 403);

@@ -8,17 +8,24 @@ export function backupDate(at = new Date()) {
   return `${date.year}-${date.month}-${date.day}`;
 }
 
-export async function exportBackup(env) {
+async function backupSnapshot(env, includeEventQuestions) {
   const tables = ['users', 'places', 'events', 'orders', 'tickets', 'legacy_events', 'legacy_event_participants', 'admins', 'audit_log'];
+  if (includeEventQuestions) tables.push('event_question_settings', 'event_questions');
   const result = await env.DB.batch(tables.map(table => env.DB.prepare(`SELECT * FROM ${table} LIMIT 10001`)));
   const data = {};
   tables.forEach((table, i) => {
     if (result[i].results.length > 10000) throw new Error('Snapshot limit exceeded — use a full D1 export or SQLite backup');
     data[table] = result[i].results;
   });
-  const text = JSON.stringify({ format: 'robotics-society-json', version: 1, created_at: new Date().toISOString(), tables: data });
+  return { format: 'robotics-society-json', version: 1, created_at: new Date().toISOString(), tables: data };
+}
+function serializeBackup(snapshot) {
+  const text = JSON.stringify(snapshot);
   if (new TextEncoder().encode(text).length > 8 * 1024 * 1024) throw new Error('Snapshot larger than 8 MB — use full database export');
   return text;
+}
+export async function exportBackup(env, { includeEventQuestions = false } = {}) {
+  return serializeBackup(await backupSnapshot(env, includeEventQuestions));
 }
 
 const bytes = new TextEncoder();
@@ -53,11 +60,16 @@ export async function putS3(env, key, content) {
   if (!response.ok) throw new Error(`Private S3 backup failed with HTTP ${response.status}`);
 }
 export async function runBackup(env, key, at = new Date()) {
-  const snapshot = await exportBackup(env);
+  const snapshot = await backupSnapshot(env, Boolean(env.S3_BUCKET));
   const filename = `robotics-society-${backupDate(at)}.json`;
   if (env.S3_BUCKET) {
     for (const field of ['S3_ENDPOINT', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY']) if (!env[field]) throw new Error(`Missing ${field}`);
-    await putS3(env, `backups/${key}/${filename}`, snapshot);
+    await putS3(env, `backups/${key}/${filename}`, serializeBackup(snapshot));
   }
-  if (env.BACKUP_CHAT) await new Store(env.DB).enqueue('sendDocument', { chat_id: env.BACKUP_CHAT, _documentText: snapshot, filename, caption: 'نسخه پشتیبان محرمانه انجمن علمی رباتیک' }, `backup-file:${key}`);
+  if (env.BACKUP_CHAT) {
+    const { event_questions, event_question_settings, ...tables } = snapshot.tables;
+    await new Store(env.DB).enqueue('sendDocument', { chat_id: env.BACKUP_CHAT,
+      _documentText: serializeBackup({ ...snapshot, tables }), filename, caption: 'نسخه پشتیبان محرمانه انجمن علمی رباتیک'
+    }, `backup-file:${key}`);
+  }
 }
