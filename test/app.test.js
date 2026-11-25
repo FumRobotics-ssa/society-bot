@@ -117,7 +117,13 @@ test('only panel admins can manage and download selected event questions', async
   assert.equal('user_id' in page.items[0], false);
   const { id } = page.items[0];
   assert.equal((await patch(`/api/events/${other.id}/questions/${id}`, { selected: true })).status, 409);
+  const messagesBeforeReview = await store.one('SELECT COUNT(*) AS count FROM outbox');
   assert.equal((await patch(path + '/' + id, { selected: true, topic: 'فرصت‌های شغلی' })).status, 200);
+  const approved = await (await request(path + '?status=approved', { headers: admin })).json();
+  const pending = await (await request(path + '?status=pending', { headers: admin })).json();
+  assert.deepEqual(approved.items.map(item => item.id), [id]);
+  assert.deepEqual(pending.items.map(item => item.question), ['پرسش دیگر برای مهمان']);
+  assert.deepEqual(await store.one('SELECT COUNT(*) AS count FROM outbox'), messagesBeforeReview);
   const exportResponse = await request(path + '/export', { headers: admin });
   assert.equal(exportResponse.status, 200);
   assert.match(exportResponse.headers.get('Content-Disposition'), /attachment.*questions\.txt/);
@@ -125,6 +131,10 @@ test('only panel admins can manage and download selected event questions', async
   const output = await exportResponse.text();
   assert.match(output, /فرصت‌های شغلی[\s\S]+نقش دانشجویان در صنعت چیست/);
   assert.doesNotMatch(output, /SenderName|09123456789|پرسش دیگر/);
+  assert.equal((await patch(path + '/' + id, { selected: false, topic: 'فرصت‌های شغلی' })).status, 200);
+  const updatedExport = await request(path + '/export', { headers: admin });
+  assert.doesNotMatch(await updatedExport.text(), /نقش دانشجویان|پرسش دیگر/);
+  assert.deepEqual(await store.one('SELECT COUNT(*) AS count FROM outbox'), messagesBeforeReview);
 });
 test('public ticket needs unpredictable token and reveals no name or phone', async () => {
   const { db, store, request } = fixture(); await store.upsertUser({ id: 1, first_name: 'PrivateName', phone: '09123456789' });

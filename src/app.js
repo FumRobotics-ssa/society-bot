@@ -147,7 +147,7 @@ async function api(request, env, store, url) {
       const { limit, offset } = pagination(url);
       const [settings, items] = await Promise.all([
         store.getEventQuestionSettings(eventId),
-        store.listEventQuestions(eventId, { limit: limit + 1, offset }),
+        store.listEventQuestions(eventId, { limit: limit + 1, offset, status: url.searchParams.get('status') }),
       ]);
       return json({ ...settings, items: items.slice(0, limit), has_more: items.length > limit });
     }
@@ -169,7 +169,7 @@ async function api(request, env, store, url) {
       const [settings, selected] = await Promise.all([store.getEventQuestionSettings(eventId), store.selectedEventQuestions(eventId)]);
       const numbers = new Intl.NumberFormat('fa-IR');
       const entries = selected.map(({ topic, question }, index) => `${numbers.format(index + 1)}. ${topic ? `${topic}\n` : ''}${question}`);
-      const content = [`سؤال‌های منتخب «${settings.name}»`, ...entries].join('\r\n\r\n');
+      const content = [`سؤال‌های تأییدشدهٔ «${settings.name}»`, ...entries].join('\r\n\r\n');
       await store.audit(session.user_id, 'event.questions.export', eventId, { count: selected.length });
       return download('\uFEFF' + content, `event-${eventId}-questions.txt`, 'text/plain;charset=utf-8');
     }

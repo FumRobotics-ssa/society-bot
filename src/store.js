@@ -6,10 +6,11 @@ const QUESTION_WINDOW = `EXISTS (
   SELECT 1 FROM event_question_settings s WHERE s.event_id=e.id AND ${QUESTIONS_OPEN}
 )`;
 const QUESTION_ACCESS = `FROM events e JOIN event_question_settings s ON s.event_id=e.id
+  JOIN users u ON u.id=? AND u.is_deleted=0
   WHERE e.id=? AND ${QUESTIONS_OPEN} AND EXISTS (
-    SELECT 1 FROM orders o JOIN users u ON u.id=o.user_id
-    WHERE o.event_id=e.id AND o.user_id=? AND o.status='approved' AND u.is_deleted=0
+    SELECT 1 FROM orders o WHERE o.event_id=e.id AND o.user_id=u.id AND o.status='approved'
   )`;
+const QUESTIONS_USED = '(SELECT COUNT(*) FROM event_questions q WHERE q.event_id=e.id AND q.user_id=u.id)';
 const TEST_EVENT_NAME = /(?:^|[^\p{L}\p{N}])(?:test(?:ing)?|demo|sample|تست(?:ی)?|آزمایش(?:ی)?|نمونه(?:ی)?)(?=$|[^\p{L}\p{N}])/iu;
 const ERRORS = {
   EVENT_FULL: 'ظرفیت رویداد تکمیل شده است',
@@ -19,6 +20,7 @@ const ERRORS = {
   STUDENT_PROFILE_INCOMPLETE: 'برای محاسبه تعرفه دانشجویی، شماره دانشجویی را در اطلاعات حساب تکمیل کنید',
   PRICE_CHANGED: 'تعرفه این رویداد از زمان نمایش خلاصه سفارش تغییر کرده است؛ مبلغ جدید را بررسی کنید',
   QUESTION_UNAVAILABLE: 'ارسال سؤال برای این رویداد بسته است یا ثبت‌نام شما در آن تأیید نشده است',
+  QUESTION_LIMIT: 'به سقف تعداد سؤال‌های این رویداد رسیده‌اید',
 };
 
 export function domainError(code, message) {
@@ -294,7 +296,8 @@ export class Store {
     return { archived: true };
   }
   async getEventQuestionSettings(eventId) {
-    const settings = await this.one(`SELECT e.id,e.name,COALESCE(s.enabled,0) AS enabled,s.closes_at
+    const settings = await this.one(`SELECT e.id,e.name,COALESCE(s.enabled,0) AS enabled,s.closes_at,
+      COALESCE(s.max_questions,3) AS max_questions
       FROM events e LEFT JOIN event_question_settings s ON s.event_id=e.id WHERE e.id=? AND e.archived=0`,
     int(eventId, 'شناسه رویداد'));
     if (!settings) throw domainError('NOT_FOUND', 'رویداد پیدا نشد');
@@ -304,17 +307,21 @@ export class Store {
     const id = int(eventId, 'شناسه رویداد');
     const enabled = flag(data.enabled);
     const closesAt = data.closes_at == null ? null : int(data.closes_at, 'مهلت ارسال سؤال', 253402300799);
+    const maxQuestions = data.max_questions == null ? null : int(data.max_questions, 'سقف سؤال هر نفر', 3);
     if (enabled && (!closesAt || closesAt <= Math.floor(Date.now() / 1000))) {
       throw domainError('INVALID_INPUT', 'برای فعال کردن دریافت سؤال، مهلتی در آینده انتخاب کنید');
     }
-    const result = await this.run(`INSERT INTO event_question_settings(event_id,enabled,closes_at)
-      SELECT id,?,? FROM events WHERE id=? AND archived=0
-      ON CONFLICT(event_id) DO UPDATE SET enabled=excluded.enabled,closes_at=excluded.closes_at`, enabled, closesAt, id);
-    if (!result.meta.changes) throw domainError('NOT_FOUND', 'رویداد پیدا نشد');
-    return { enabled, closes_at: closesAt };
+    const settings = await this.one(`INSERT INTO event_question_settings(event_id,enabled,closes_at,max_questions)
+      SELECT id,?,?,COALESCE(?,3) FROM events WHERE id=? AND archived=0
+      ON CONFLICT(event_id) DO UPDATE SET enabled=excluded.enabled,closes_at=excluded.closes_at,
+        max_questions=COALESCE(?,event_question_settings.max_questions)
+      RETURNING enabled,closes_at,max_questions`, enabled, closesAt, maxQuestions, id, maxQuestions);
+    if (!settings) throw domainError('NOT_FOUND', 'رویداد پیدا نشد');
+    return settings;
   }
   async getEventQuestionAccess(eventId, userId) {
-    return this.one(`SELECT e.name ${QUESTION_ACCESS}`, int(eventId, 'شناسه رویداد'), int(userId, 'شناسه کاربر'));
+    return this.one(`SELECT e.name, s.max_questions-${QUESTIONS_USED} AS remaining ${QUESTION_ACCESS}`,
+      int(userId, 'شناسه کاربر'), int(eventId, 'شناسه رویداد'));
   }
   async submitEventQuestion(eventId, userId, question, requestKey) {
     const id = int(eventId, 'شناسه رویداد');
@@ -322,14 +329,20 @@ export class Store {
     const text = string(question, 'متن سؤال', 1000, true);
     const key = string(requestKey, 'شناسه درخواست', 200, true);
     const result = await this.run(`INSERT INTO event_questions(event_id,user_id,request_key,question)
-      SELECT e.id,?,?,? ${QUESTION_ACCESS} ON CONFLICT(request_key) DO NOTHING`, user, key, text, id, user);
+      SELECT e.id,u.id,?,? ${QUESTION_ACCESS} AND ${QUESTIONS_USED}<s.max_questions
+      ON CONFLICT(request_key) DO NOTHING`, key, text, user, id);
     if (result.meta.changes) return;
     const existing = await this.one('SELECT 1 FROM event_questions WHERE request_key=? AND event_id=? AND user_id=?', key, id, user);
-    if (!existing) throw domainError('QUESTION_UNAVAILABLE');
+    if (existing) return;
+    const access = await this.getEventQuestionAccess(id, user);
+    if (access?.remaining <= 0) throw domainError('QUESTION_LIMIT');
+    throw domainError('QUESTION_UNAVAILABLE');
   }
-  async listEventQuestions(eventId, { limit = 50, offset = 0 } = {}) {
+  async listEventQuestions(eventId, { limit = 50, offset = 0, status } = {}) {
+    const selected = status === 'approved' ? 1 : status === 'pending' ? 0 : null;
     return this.all(`SELECT id,question,topic,selected,created_at FROM event_questions
-      WHERE event_id=? ORDER BY id DESC LIMIT ? OFFSET ?`, int(eventId, 'شناسه رویداد'), ...paging(limit, offset));
+      WHERE event_id=? AND (? IS NULL OR selected=?) ORDER BY id DESC LIMIT ? OFFSET ?`,
+    int(eventId, 'شناسه رویداد'), selected, selected, ...paging(limit, offset));
   }
   async selectEventQuestion(eventId, questionId, data) {
     const result = await this.run(`UPDATE event_questions SET topic=?,selected=? WHERE event_id=? AND id=?

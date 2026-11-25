@@ -195,6 +195,7 @@ select{
 .questions-dialog fieldset>.check{margin-bottom:12px}
 .questions-list-heading{margin:24px 0 8px;flex-wrap:wrap}
 .questions-list-heading h3{margin:0}
+.questions-list-heading select{width:auto}
 .question-item{padding:14px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;background:var(--paper)}
 .question-text{white-space:pre-wrap;overflow-wrap:anywhere;margin:0 0 12px}
 .question-controls{display:flex;flex-wrap:wrap;align-items:end;gap:10px}

@@ -33,7 +33,7 @@ LEGACY_AUDIENCE_FIELDS = {
 }
 HISTORICAL_FIELDS = {**BASE_FIELDS, **LEGACY_AUDIENCE_FIELDS}
 QUESTION_FIELDS = {
-    "event_question_settings": "event_id enabled closes_at",
+    "event_question_settings": "event_id enabled closes_at max_questions",
     "event_questions": "id event_id user_id request_key question topic selected created_at",
 }
 FIELDS = {**HISTORICAL_FIELDS, **QUESTION_FIELDS}
@@ -83,6 +83,8 @@ def validate_snapshot(snapshot, include_admins=False):
                     row = {**row, "poster_url": ""}
                 if "confirmation_message" not in row:
                     row = {**row, "confirmation_message": ""}
+            if table == "event_question_settings" and isinstance(row, dict) and "max_questions" not in row:
+                row = {**row, "max_questions": 3}
             if table == "orders" and isinstance(row, dict) and set(row) == OLD_ORDER_FIELDS:
                 row = {**row, "pricing_group": "fixed"}
             if table == "tickets" and isinstance(row, dict) and set(row) == OLD_TICKET_FIELDS:

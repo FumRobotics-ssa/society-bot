@@ -139,6 +139,14 @@ test('registered attendees can submit a private question once per update and res
   const confirmation = await f.store.one('SELECT payload FROM outbox WHERE dedupe_key=?', `update:${question.update_id}:reply`);
   assert.match(JSON.parse(confirmation.payload).text, /سؤالت ثبت شد/);
 
+  const closesAt = Math.floor(Date.now() / 1000) + 3600;
+  await f.store.saveEventQuestionSettings(event.id, { enabled: true, closes_at: closesAt, max_questions: 1 });
+  await f.click(`eq:${event.id}`);
+  const limitReply = await f.store.one("SELECT payload FROM outbox WHERE method='answerCallbackQuery' AND payload LIKE '%به سقف تعداد سؤال‌های%'");
+  assert.ok(limitReply);
+  assert.equal((await f.store.getState(1)).step, 'reserve_quantity');
+  await f.store.saveEventQuestionSettings(event.id, { enabled: true, closes_at: closesAt, max_questions: 3 });
+
   await f.store.saveEvent({ active: 0 }, event.id);
   await f.click(`o:${booking.order.id}`);
   assert.ok(await f.store.one("SELECT payload FROM outbox WHERE dedupe_key LIKE '%:view:approved:0' AND payload LIKE '%پرسش از مهمان%'"));

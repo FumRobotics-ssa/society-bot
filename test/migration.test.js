@@ -116,7 +116,7 @@ test('questions are recoverable from private backups and excluded from Telegram 
   await store.upsertUser({ id: 1, phone: '09123456789' });
   const event = await store.saveEvent({ name: 'نشست', capacity: 2 });
   await store.reserve(1, event.id, 1, 'booking');
-  await store.saveEventQuestionSettings(event.id, { enabled: true, closes_at: Math.floor(Date.now() / 1000) + 3600 });
+  await store.saveEventQuestionSettings(event.id, { enabled: true, closes_at: Math.floor(Date.now() / 1000) + 3600, max_questions: 2 });
   await store.submitEventQuestion(event.id, 1, 'متن محرمانهٔ پرسش', 'question-key');
   const [question] = await store.listEventQuestions(event.id);
   await store.selectEventQuestion(event.id, question.id, { selected: true, topic: 'صنعت' });
@@ -136,12 +136,16 @@ test('questions are recoverable from private backups and excluded from Telegram 
   assert.equal('event_question_settings' in telegramBackup.tables, false);
 
   const source = join(directory, 'backup.json'), output = join(directory, 'restore.sql');
-  writeFileSync(source, privateBackup);
+  const preLimitBackup = JSON.parse(privateBackup);
+  assert.equal(preLimitBackup.tables.event_question_settings[0].max_questions, 2);
+  delete preLimitBackup.tables.event_question_settings[0].max_questions;
+  writeFileSync(source, JSON.stringify(preLimitBackup));
   const result = spawnSync('python', [fileURLToPath(new URL('../scripts/restore-backup.py', import.meta.url)), source, output], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
   restored.exec(readFileSync(output, 'utf8'));
   const restoredStore = new Store(restored);
   assert.equal((await restoredStore.getEventQuestionSettings(event.id)).enabled, 1);
+  assert.equal((await restoredStore.getEventQuestionSettings(event.id)).max_questions, 3);
   assert.deepEqual((await restoredStore.selectedEventQuestions(event.id)).map(row => ({ ...row })),
     [{ question: 'متن محرمانهٔ پرسش', topic: 'صنعت' }]);
 });
