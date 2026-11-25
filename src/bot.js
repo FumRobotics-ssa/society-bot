@@ -303,12 +303,13 @@ export async function handleUpdate(update, env, store) {
         const eventId = positive(question[1]);
         const access = await store.getEventQuestionAccess(eventId, from.id);
         if (!access) return answer('ارسال سؤال بسته است یا ثبت‌نام شما در این رویداد تأیید نشده است');
+        if (access.remaining <= 0) return answer('به سقف تعداد سؤال‌های این رویداد رسیده‌اید');
         const state = await store.getState(from.id);
         const previous = stateData(state);
         const resume = state?.step === 'event_question' ? previous.resume
           : state ? { step: state.step, data: previous } : null;
         await transition('event_question', { event_id: eventId, resume },
-          `سؤال خود را برای مهمان رویداد «${access.name}» در یک پیام متنی بفرستید. حداکثر ۱۰۰۰ نویسه\nبرای انصراف /cancel را بفرستید`);
+          `سؤال خود را برای مهمان رویداد «${access.name}» در یک پیام متنی تا ۱۰۰۰ نویسه بفرستید.\nتعداد سؤال‌های باقی‌مانده: ${money(access.remaining)}\nبرای انصراف /cancel را بفرستید`);
         return answer();
       }
       const eventLinkAction = /^(el|elp):(\d{1,16})$/.exec(data);
@@ -411,7 +412,7 @@ export async function handleUpdate(update, env, store) {
           try {
             await store.submitEventQuestion(data.event_id, from.id, rawText, `${updateKey}:event-question`);
           } catch (error) {
-            if (error.code !== 'QUESTION_UNAVAILABLE') throw error;
+            if (!['QUESTION_UNAVAILABLE', 'QUESTION_LIMIT'].includes(error.code)) throw error;
             return finishQuestion(data, error.message);
           }
           return finishQuestion(data, 'سؤالت ثبت شد و برای بررسی در اختیار تیم برگزارکننده قرار گرفت');

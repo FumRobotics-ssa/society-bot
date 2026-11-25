@@ -248,3 +248,28 @@ test('cancel and expiry release capacity and outgoing messages are deduplicated'
   await store.enqueue('sendMessage', { chat_id: 1, text: 'hello' }, 'same-key');
   assert.equal(db.native.prepare('SELECT COUNT(*) AS n FROM outbox').get().n, 1);
 });
+
+test('the event question cap is per attendee and retry-safe at the limit', async t => {
+  const { store, event } = await fixture(t);
+  const other = await store.saveEvent({ name: 'نشست دوم', capacity: 2 });
+  await store.reserve(1, event.id, 1, 'first-attendee');
+  await store.reserve(2, event.id, 1, 'second-attendee');
+  await store.reserve(1, other.id, 1, 'other-event');
+  const settings = { enabled: true, closes_at: Math.floor(Date.now() / 1000) + 3600 };
+  await assert.rejects(store.saveEventQuestionSettings(event.id, { ...settings, max_questions: 4 }), { code: 'INVALID_INPUT' });
+  assert.equal((await store.saveEventQuestionSettings(event.id, settings)).max_questions, 3);
+  await store.saveEventQuestionSettings(other.id, { ...settings, max_questions: 1 });
+
+  const keys = ['question-1', 'question-2', 'question-3', 'question-4'];
+  const attempts = await Promise.allSettled(keys.map(key => store.submitEventQuestion(event.id, 1, key, key)));
+  assert.equal(attempts.filter(result => result.status === 'fulfilled').length, 3);
+  assert.equal(attempts.find(result => result.status === 'rejected').reason.code, 'QUESTION_LIMIT');
+  const savedKey = keys[attempts.findIndex(result => result.status === 'fulfilled')];
+  await store.submitEventQuestion(event.id, 1, savedKey, savedKey);
+  assert.equal((await store.listEventQuestions(event.id)).length, 3);
+  assert.equal((await store.getEventQuestionAccess(event.id, 1)).remaining, 0);
+  await store.submitEventQuestion(event.id, 2, 'سؤال نفر دوم', 'second-attendee-q');
+  await store.submitEventQuestion(other.id, 1, 'سؤال رویداد دوم', 'other-event-q');
+  await assert.rejects(store.submitEventQuestion(other.id, 1, 'سؤال اضافه', 'other-extra'), { code: 'QUESTION_LIMIT' });
+  assert.equal((await store.saveEventQuestionSettings(other.id, settings)).max_questions, 1);
+});
