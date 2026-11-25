@@ -90,21 +90,11 @@
             </div>
             <label class="full">توضیحات<textarea name="description" rows="3" maxlength="3000"></textarea></label>
             <label class="full">راهنمای پرداخت دستی<textarea name="payment_instructions" rows="3" maxlength="1500" placeholder="شماره کارت و نام صاحب حساب و توضیحات ارسال رسید"></textarea></label>
-          </div><div class="form-actions"><button class="button" type="submit">ذخیره رویداد</button></div>
-        </form>
-        <div id="events-list" class="event-grid"></div>
-      </section>
-        <dialog id="jalali-dialog" class="jalali-dialog" aria-labelledby="jalali-dialog-title"><div class="jalali-calendar-header"><button id="jalali-prev" class="button secondary small" type="button" aria-label="ماه قبل">›</button><strong id="jalali-dialog-title" aria-live="polite"></strong><button id="jalali-next" class="button secondary small" type="button" aria-label="ماه بعد">‹</button></div><div class="jalali-selects"><label>سال<select id="jalali-year" aria-label="سال شمسی"></select></label><label>ماه<select id="jalali-month" aria-label="ماه شمسی"></select></label><label>روز<select id="jalali-day" aria-label="روز ماه"></select></label></div><div class="jalali-weekdays" aria-hidden="true"><span>ش</span><span>ی</span><span>د</span><span>س</span><span>چ</span><span>پ</span><span>ج</span></div><div id="jalali-days" class="jalali-days" role="group" aria-label="روزهای ماه"></div><div class="jalali-dialog-actions"><button id="jalali-today" class="button secondary" type="button">امروز</button><div><button id="jalali-close" class="button secondary" type="button">بستن</button><button id="jalali-confirm" class="button" type="button">انتخاب تاریخ</button></div></div></dialog>
-        <dialog id="time-dialog" class="jalali-dialog" aria-labelledby="time-dialog-title"><strong id="time-dialog-title" class="time-dialog-title">انتخاب ساعت شروع</strong><div class="time-selects"><label>ساعت<select id="time-hour" aria-label="ساعت شروع"></select></label><label>دقیقه<select id="time-minute" aria-label="دقیقه شروع"></select></label></div><div class="jalali-dialog-actions"><button id="time-cancel" class="button secondary" type="button">انصراف</button><button id="time-confirm" class="button" type="button">ثبت ساعت</button></div></dialog>
-      <dialog id="questions-dialog" class="questions-dialog" aria-labelledby="questions-title">
-        <div class="section-heading">
-          <h2 id="questions-title">پرسش‌های رویداد</h2>
-          <form method="dialog"><button class="button secondary small" type="submit">بستن</button></form>
-        </div>
-        <form id="question-settings-form">
-          <fieldset id="question-settings-fields" disabled>
-            <label class="check"><input id="questions-enabled" type="checkbox"> دریافت سؤال از ثبت‌نام‌کنندگان قطعی</label>
-            <div class="form-grid">
+          </div>
+          <fieldset class="event-question-settings">
+            <legend>پرسش‌های رویداد</legend>
+            <label class="check"><input id="questions-enabled" type="checkbox" aria-controls="questions-options"> دریافت سؤال از ثبت‌نام‌کنندگان قطعی</label>
+            <div id="questions-options" class="form-grid" hidden>
               <div class="jalali-field">
                 <label for="questions-date">مهلت ارسال</label>
                 <div class="jalali-input-row"><input id="questions-date" type="text" dir="ltr" readonly placeholder="تاریخ شمسی را انتخاب کنید" aria-haspopup="dialog" aria-controls="jalali-dialog"><button id="questions-date-open" class="button secondary" type="button">تقویم شمسی</button></div>
@@ -115,9 +105,18 @@
               </div>
               <label>سقف سؤال هر نفر<select id="questions-max"><option value="1">۱</option><option value="2">۲</option><option value="3" selected>۳</option></select></label>
             </div>
-            <div class="form-actions"><button class="button" type="submit">ذخیره تنظیمات</button></div>
           </fieldset>
+          <div class="form-actions"><button class="button" type="submit">ذخیره رویداد</button></div>
         </form>
+        <div id="events-list" class="event-grid"></div>
+      </section>
+        <dialog id="jalali-dialog" class="jalali-dialog" aria-labelledby="jalali-dialog-title"><div class="jalali-calendar-header"><button id="jalali-prev" class="button secondary small" type="button" aria-label="ماه قبل">›</button><strong id="jalali-dialog-title" aria-live="polite"></strong><button id="jalali-next" class="button secondary small" type="button" aria-label="ماه بعد">‹</button></div><div class="jalali-selects"><label>سال<select id="jalali-year" aria-label="سال شمسی"></select></label><label>ماه<select id="jalali-month" aria-label="ماه شمسی"></select></label><label>روز<select id="jalali-day" aria-label="روز ماه"></select></label></div><div class="jalali-weekdays" aria-hidden="true"><span>ش</span><span>ی</span><span>د</span><span>س</span><span>چ</span><span>پ</span><span>ج</span></div><div id="jalali-days" class="jalali-days" role="group" aria-label="روزهای ماه"></div><div class="jalali-dialog-actions"><button id="jalali-today" class="button secondary" type="button">امروز</button><div><button id="jalali-close" class="button secondary" type="button">بستن</button><button id="jalali-confirm" class="button" type="button">انتخاب تاریخ</button></div></div></dialog>
+        <dialog id="time-dialog" class="jalali-dialog" aria-labelledby="time-dialog-title"><strong id="time-dialog-title" class="time-dialog-title">انتخاب ساعت شروع</strong><div class="time-selects"><label>ساعت<select id="time-hour" aria-label="ساعت شروع"></select></label><label>دقیقه<select id="time-minute" aria-label="دقیقه شروع"></select></label></div><div class="jalali-dialog-actions"><button id="time-cancel" class="button secondary" type="button">انصراف</button><button id="time-confirm" class="button" type="button">ثبت ساعت</button></div></dialog>
+      <dialog id="questions-dialog" class="questions-dialog" aria-labelledby="questions-title">
+        <div class="section-heading">
+          <h2 id="questions-title">پرسش‌های رویداد</h2>
+          <form method="dialog"><button class="button secondary small" type="submit">بستن</button></form>
+        </div>
         <div class="section-heading questions-list-heading">
           <h3>سؤال‌های دریافت‌شده</h3>
           <select id="questions-filter" aria-label="وضعیت تأیید سؤال‌ها">

@@ -177,7 +177,11 @@ async function api(request, env, store, url) {
   }
   if (path === '/api/audience-events' && method === 'GET') return json(await store.listAudienceEvents(pagination(url)));
   if (path === '/api/places' && method === 'GET') return json(await store.listPlaces());
-  if (path === '/api/events' && method === 'POST') { const item = await store.saveEvent(await body(request)); await store.audit(session.user_id, 'event.create', item.id, {}); return json(item, 201); }
+  if (path === '/api/events' && method === 'POST') {
+    const item = await store.saveEvent(await body(request));
+    await store.audit(session.user_id, 'event.create', item.id, item.question_settings ? { question_settings: item.question_settings } : {});
+    return json(item, 201);
+  }
   if (path === '/api/places' && method === 'POST') { const item = await store.savePlace(await body(request)); await store.audit(session.user_id, 'place.create', item.id, {}); return json(item, 201); }
   const entity = path.match(/^\/api\/(events|places)\/(\d+)$/);
   if (entity && ['PATCH', 'DELETE'].includes(method)) {
@@ -185,7 +189,7 @@ async function api(request, env, store, url) {
     const result = method === 'DELETE'
       ? await store[kind === 'events' ? 'deleteEvent' : 'deletePlace'](id)
       : await store[kind === 'events' ? 'saveEvent' : 'savePlace'](await body(request), id);
-    await store.audit(session.user_id, `${kind}.${method.toLowerCase()}`, id, {});
+    await store.audit(session.user_id, `${kind}.${method.toLowerCase()}`, id, result?.question_settings ? { question_settings: result.question_settings } : {});
     return json(result ?? { ok: true });
   }
   if (path === '/api/orders' && method === 'GET') return json(await store.listOrders({ ...pagination(url), status: url.searchParams.get('status') || undefined, eventId: url.searchParams.get('eventId') || undefined }));

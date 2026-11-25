@@ -84,6 +84,47 @@ test('event statistics count distinct registrants, checked-in tickets and live r
   assert.equal(stats.occupied, 8);
   assert.equal(stats.remaining, 4);
 });
+test('event creation and editing save question settings with the event', async t => {
+  const { db, store, request } = fixture();
+  t.after(() => db.close());
+  await store.setAdmin(7, 'checkin');
+  await store.setAdmin(8, 'admin');
+  const headers = { Cookie: await cookie(db, 8), Origin: 'https://example.test' };
+  const write = (method, path, data, auth = headers) => request(path, { method, headers: auth, body: JSON.stringify(data) });
+  const events = '/api/events';
+  const closesAt = Math.floor(Date.now() / 1000) + 3600;
+  const question_settings = { enabled: true, closes_at: closesAt, max_questions: 2 };
+  const input = { name: 'گفت‌وگو با مهمان', capacity: 12, question_settings };
+
+  const checkin = { ...headers, Cookie: await cookie(db, 7) };
+  assert.equal((await write('POST', events, input, checkin)).status, 403);
+  assert.equal((await write('POST', events, { ...input, question_settings: { ...question_settings, closes_at: 1 } })).status, 409);
+  assert.deepEqual(await store.listEventsWithRegistrationStats(), []);
+
+  const created = await write('POST', events, input);
+  assert.equal(created.status, 201);
+  const event = await created.json();
+  assert.deepEqual(event.question_settings, { ...question_settings, enabled: 1 });
+  const [listed] = await (await request(events, { headers })).json();
+  assert.equal(listed.id, event.id);
+  assert.equal(listed.questions_enabled, 1);
+  assert.equal(listed.questions_closes_at, closesAt);
+  assert.equal(listed.questions_max, 2);
+
+  const path = events + '/' + event.id;
+  assert.equal((await write('PATCH', path, { name: 'ویرایش نام', question_settings: { ...question_settings, max_questions: 4 } })).status, 409);
+  assert.equal((await store.getEvent(event.id)).name, input.name);
+  assert.equal((await write('PATCH', path, { active: false })).status, 200);
+  assert.equal((await store.getEventQuestionSettings(event.id)).enabled, 1);
+
+  const edited = await write('PATCH', path, { name: 'ویرایش نام', question_settings: { ...question_settings, enabled: false, max_questions: 1 } });
+  assert.equal(edited.status, 200);
+  const updated = await edited.json();
+  assert.equal(updated.name, 'ویرایش نام');
+  assert.deepEqual({ ...await store.getEventQuestionSettings(event.id) }, {
+    id: event.id, name: updated.name, enabled: 0, closes_at: closesAt, max_questions: 1,
+  });
+});
 test('only panel admins can manage and download selected event questions', async t => {
   const { db, store, request } = fixture();
   t.after(() => db.close());
