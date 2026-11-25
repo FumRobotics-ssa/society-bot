@@ -138,7 +138,7 @@ async function api(request, env, store, url) {
     const jobs = await env.DB.prepare("SELECT (SELECT COUNT(*) FROM inbox WHERE status='failed') AS failed_inbox,(SELECT COUNT(*) FROM outbox WHERE status='failed') AS failed_outbox").first();
     return json({ ...stats, ...jobs });
   }
-  if (path === '/api/events' && method === 'GET') return json(await store.listEvents(pagination(url)));
+  if (path === '/api/events' && method === 'GET') return json(await store.listEventsWithRegistrationStats(pagination(url)));
   if (path === '/api/audience-events' && method === 'GET') return json(await store.listAudienceEvents(pagination(url)));
   if (path === '/api/places' && method === 'GET') return json(await store.listPlaces());
   if (path === '/api/events' && method === 'POST') { const item = await store.saveEvent(await body(request)); await store.audit(session.user_id, 'event.create', item.id, {}); return json(item, 201); }

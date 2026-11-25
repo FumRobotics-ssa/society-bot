@@ -255,6 +255,31 @@ function pager(container, key, count) {
   row.append(previous, el('span', 'صفحه ' + number(state.pages[key] + 1), 'muted'), next);
   container.append(row);
 }
+function eventRegistrationStats(event) {
+  const stats = el('div', null, 'event-registration-stats');
+  const summary = el('div', null, 'event-capacity-summary');
+  summary.append(el('span', 'ظرفیت آزاد'), el('strong', `${number(event.remaining)} از ${number(event.capacity)} نفر`));
+
+  const meter = el('meter', null, 'event-capacity-meter');
+  meter.max = Number(event.capacity);
+  meter.value = Number(event.occupied);
+  meter.setAttribute('aria-label', 'ظرفیت اشغال‌شده');
+
+  const metrics = el('dl', null, 'event-registration-metrics');
+  const values = [
+    ['ثبت‌نام‌کنندهٔ قطعی', event.registered_users, 'نفر'],
+    ['حضور ثبت‌شده', event.checked_in_tickets, 'نفر'],
+    ['بلیت تأییدشده', event.approved_tickets, 'بلیت'],
+    ['رزرو موقت', event.held_tickets, 'بلیت'],
+  ];
+  for (const [label, value, unit] of values) {
+    const item = el('div');
+    item.append(el('dt', label), el('dd', `${number(value)} ${unit}`));
+    metrics.append(item);
+  }
+  stats.append(summary, meter, metrics);
+  return stats;
+}
 function eventCard(event, editable) {
   const card = el('article', null, 'event-card');
   const top = el('div', null, 'card-top');
@@ -275,8 +300,8 @@ function eventCard(event, editable) {
   card.append(el('h3', event.name), el('p', event.description || 'توضیحی برای این رویداد ثبت نشده', 'description'));
   const meta = el('div', null, 'event-meta');
   const place = state.places.find((place) => String(place.id) === String(event.place_id));
-  [['زمان شروع', date(event.starts_at)], ['مکان', place?.name || event.place_name || 'تعیین نشده'], ['ظرفیت', number(event.capacity) + ' نفر'], ['سقف هر نفر', number(event.max_per_user) + ' بلیت']].forEach(([label, value]) => { const cell = el('div', label); cell.append(el('strong', value)); meta.append(cell); });
-  card.append(meta);
+  [['زمان شروع', date(event.starts_at)], ['مکان', place?.name || event.place_name || 'تعیین نشده'], ['سقف هر نفر', number(event.max_per_user) + ' بلیت']].forEach(([label, value]) => { const cell = el('div', label); cell.append(el('strong', value)); meta.append(cell); });
+  card.append(meta, eventRegistrationStats(event));
   const actions = el('div', null, 'actions');
   if (editable) {
     actions.append(button('ویرایش', () => editEvent(event)), button(yes(event.active) ? 'توقف رزرو' : 'فعال کردن رزرو', async () => { await api('/api/events/' + encodeURIComponent(event.id), { method: 'PATCH', body: { active: !yes(event.active) } }); await load(); toast('وضعیت رزرو به‌روز شد'); }));
