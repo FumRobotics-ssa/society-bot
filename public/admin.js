@@ -324,7 +324,7 @@ function eventCard(event, editable) {
     actions.append(button('ویرایش', () => editEvent(event)), button(yes(event.active) ? 'توقف رزرو' : 'فعال کردن رزرو', async () => { await api('/api/events/' + encodeURIComponent(event.id), { method: 'PATCH', body: { active: !yes(event.active) } }); await load(); toast('وضعیت رزرو به‌روز شد'); }));
     actions.append(button('حذف', async () => { if (!confirm('این رویداد حذف شود؟ سوابق سفارش‌ها باید در سرور حفظ شوند')) return; await api('/api/events/' + encodeURIComponent(event.id), { method: 'DELETE' }); await load(); toast('رویداد حذف شد'); }, 'button danger small'));
   } else actions.append(button('مشاهده بلیت‌ها', async () => { await navigate('tickets'); $('tickets-event').value = event.id; await load(); }));
-  actions.append(button('بررسی پرسش‌ها', () => openEventQuestions(event)));
+  if (yes(event.questions_enabled)) actions.append(button('بررسی پرسش‌ها', () => openEventQuestions(event)));
   card.append(actions); return card;
 }
 const QUESTION_PAGE_SIZE = 25;
