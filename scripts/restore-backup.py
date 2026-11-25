@@ -21,7 +21,7 @@ spec.loader.exec_module(legacy)
 BASE_FIELDS = {
     "users": "id username first_name last_name phone profile_json is_deleted created_at updated_at",
     "places": "id name address capacity created_at map_url",
-    "events": "id name description place_id capacity max_per_user is_paid price pricing_mode fum_student_price payment_instructions starts_at active archived created_at updated_at poster_url",
+    "events": "id name description place_id capacity max_per_user is_paid price pricing_mode fum_student_price payment_instructions starts_at active archived created_at updated_at poster_url confirmation_message",
     "orders": "id request_key user_id event_id quantity unit_price pricing_group status expires_at receipt_file_id receipt_type receipt_key reviewed_by reviewed_at created_at updated_at",
     "tickets": "id token checkin_code legacy_code order_id checked_in_at checked_in_by created_at",
     "admins": "user_id role created_at",
@@ -31,7 +31,12 @@ LEGACY_AUDIENCE_FIELDS = {
     "legacy_events": "id name description place_name place_address is_paid was_active imported_at",
     "legacy_event_participants": "legacy_event_id user_id ticket_count source_status",
 }
-FIELDS = {**BASE_FIELDS, **LEGACY_AUDIENCE_FIELDS}
+HISTORICAL_FIELDS = {**BASE_FIELDS, **LEGACY_AUDIENCE_FIELDS}
+QUESTION_FIELDS = {
+    "event_question_settings": "event_id enabled closes_at",
+    "event_questions": "id event_id user_id request_key question topic selected created_at",
+}
+FIELDS = {**HISTORICAL_FIELDS, **QUESTION_FIELDS}
 OLD_TICKET_FIELDS = set(BASE_FIELDS["tickets"].split()) - {"checkin_code"}
 OLD_EVENT_FIELDS = set(BASE_FIELDS["events"].split()) - {"pricing_mode", "fum_student_price", "poster_url"}
 PRE_POSTER_EVENT_FIELDS = set(BASE_FIELDS["events"].split()) - {"poster_url"}
@@ -51,7 +56,7 @@ def validate_snapshot(snapshot, include_admins=False):
     if set(snapshot) - {"format", "version", "created_at", "tables"}:
         raise ValueError("Unknown top level snapshot fields")
     tables = snapshot.get("tables")
-    if not isinstance(tables, dict) or frozenset(tables) not in {frozenset(BASE_FIELDS), frozenset(FIELDS)}:
+    if not isinstance(tables, dict) or set(tables) not in (set(BASE_FIELDS), set(HISTORICAL_FIELDS), set(FIELDS)):
         raise ValueError("Snapshot must contain exactly a supported set of backup tables")
     sql = legacy.empty_guard()
     checkin_codes = set()
@@ -76,6 +81,8 @@ def validate_snapshot(snapshot, include_admins=False):
                     row = {**row, "fum_student_price": 0}
                 if "poster_url" not in row:
                     row = {**row, "poster_url": ""}
+                if "confirmation_message" not in row:
+                    row = {**row, "confirmation_message": ""}
             if table == "orders" and isinstance(row, dict) and set(row) == OLD_ORDER_FIELDS:
                 row = {**row, "pricing_group": "fixed"}
             if table == "tickets" and isinstance(row, dict) and set(row) == OLD_TICKET_FIELDS:
@@ -105,13 +112,8 @@ def validate_snapshot(snapshot, include_admins=False):
     text = "\n".join(sql) + "\n"
     check = sqlite3.connect(":memory:")
     try:
-        check.executescript((ROOT / "migrations" / "0001_init.sql").read_text(encoding="utf8"))
-        check.executescript((ROOT / "migrations" / "0002_place_map_url.sql").read_text(encoding="utf8"))
-        check.executescript((ROOT / "migrations" / "0003_legacy_event_audience.sql").read_text(encoding="utf8"))
-        check.executescript((ROOT / "migrations" / "0004_ticket_checkin_code.sql").read_text(encoding="utf8"))
-        check.executescript((ROOT / "migrations" / "0005_randomize_ticket_checkin_codes.sql").read_text(encoding="utf8"))
-        check.executescript((ROOT / "migrations" / "0006_differentiated_event_pricing.sql").read_text(encoding="utf8"))
-        check.executescript((ROOT / "migrations" / "0007_event_poster.sql").read_text(encoding="utf8"))
+        for migration in sorted((ROOT / "migrations").glob("*.sql")):
+            check.executescript(migration.read_text(encoding="utf8"))
         check.executescript(text)
         if check.execute("PRAGMA foreign_key_check").fetchone():
             raise ValueError("Snapshot contains broken foreign keys")

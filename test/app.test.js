@@ -84,6 +84,48 @@ test('event statistics count distinct registrants, checked-in tickets and live r
   assert.equal(stats.occupied, 8);
   assert.equal(stats.remaining, 4);
 });
+test('only panel admins can manage and download selected event questions', async t => {
+  const { db, store, request } = fixture();
+  t.after(() => db.close());
+  await store.upsertUser({ id: 1, phone: '09123456789', first_name: 'SenderName' });
+  await store.setAdmin(7, 'checkin');
+  await store.setAdmin(8, 'admin');
+  const event = await store.saveEvent({ name: 'گفت‌وگوی صنعت', capacity: 2 });
+  const other = await store.saveEvent({ name: 'رویداد دیگر', capacity: 2 });
+  await store.reserve(1, event.id, 1, 'registered');
+  const path = `/api/events/${event.id}/questions`;
+  const checkin = { Cookie: await cookie(db, 7) };
+  assert.equal((await request(path)).status, 401);
+  assert.equal((await request(path + '/export')).status, 401);
+  assert.equal((await request(path, { headers: checkin })).status, 403);
+  assert.equal((await request(path + '/export', { headers: checkin })).status, 403);
+
+  const admin = { Cookie: await cookie(db, 8), Origin: 'https://example.test' };
+  const patch = (url, body) => request(url, { method: 'PATCH', headers: admin, body: JSON.stringify(body) });
+  const initial = await (await request(path, { headers: admin })).json();
+  assert.equal(initial.enabled, 0);
+  assert.equal(initial.closes_at, null);
+  assert.equal((await patch(path, { enabled: true, closes_at: 1 })).status, 409);
+  const closesAt = Math.floor(Date.now() / 1000) + 3600;
+  assert.equal((await patch(path, { enabled: true, closes_at: closesAt })).status, 200);
+  await store.submitEventQuestion(event.id, 1, 'نقش دانشجویان در صنعت چیست؟', 'chosen');
+  await store.submitEventQuestion(event.id, 1, 'پرسش دیگر برای مهمان', 'unselected');
+  const page = await (await request(path + '?limit=1&offset=1', { headers: admin })).json();
+  assert.equal(page.closes_at, closesAt);
+  assert.equal(page.items.length, 1);
+  assert.equal(page.items[0].question, 'نقش دانشجویان در صنعت چیست؟');
+  assert.equal('user_id' in page.items[0], false);
+  const { id } = page.items[0];
+  assert.equal((await patch(`/api/events/${other.id}/questions/${id}`, { selected: true })).status, 409);
+  assert.equal((await patch(path + '/' + id, { selected: true, topic: 'فرصت‌های شغلی' })).status, 200);
+  const exportResponse = await request(path + '/export', { headers: admin });
+  assert.equal(exportResponse.status, 200);
+  assert.match(exportResponse.headers.get('Content-Disposition'), /attachment.*questions\.txt/);
+  assert.equal(exportResponse.headers.get('Cache-Control'), 'no-store');
+  const output = await exportResponse.text();
+  assert.match(output, /فرصت‌های شغلی[\s\S]+نقش دانشجویان در صنعت چیست/);
+  assert.doesNotMatch(output, /SenderName|09123456789|پرسش دیگر/);
+});
 test('public ticket needs unpredictable token and reveals no name or phone', async () => {
   const { db, store, request } = fixture(); await store.upsertUser({ id: 1, first_name: 'PrivateName', phone: '09123456789' });
   const event = await store.saveEvent({ name: '<script>bad</script>', capacity: 2 });

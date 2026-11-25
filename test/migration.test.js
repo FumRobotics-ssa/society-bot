@@ -106,6 +106,46 @@ test('JSON backup restore preserves ticket token and excludes sessions and admin
   assert.match(legacyTarget.native.prepare('SELECT checkin_code FROM tickets').get().checkin_code, /^[1-9][0-9]{7}$/);
   db.close(); target.close(); oldTarget.close(); legacyTarget.close(); rmSync(dir, { recursive: true });
 });
+test('questions are recoverable from private backups and excluded from Telegram backup documents', async t => {
+  const db = createDatabase(); db.exec(schema);
+  const restored = createDatabase(); restored.exec(schema);
+  t.after(() => { db.close(); restored.close(); });
+  const directory = mkdtempSync(join(tmpdir(), 'robotics-questions-restore-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const store = new Store(db);
+  await store.upsertUser({ id: 1, phone: '09123456789' });
+  const event = await store.saveEvent({ name: 'نشست', capacity: 2 });
+  await store.reserve(1, event.id, 1, 'booking');
+  await store.saveEventQuestionSettings(event.id, { enabled: true, closes_at: Math.floor(Date.now() / 1000) + 3600 });
+  await store.submitEventQuestion(event.id, 1, 'متن محرمانهٔ پرسش', 'question-key');
+  const [question] = await store.listEventQuestions(event.id);
+  await store.selectEventQuestion(event.id, question.id, { selected: true, topic: 'صنعت' });
+
+  let privateBackup;
+  t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    privateBackup = options.body;
+    return new Response(null, { status: 200 });
+  });
+  const env = { DB: db, BACKUP_CHAT: '-100456', S3_BUCKET: 'private', S3_ENDPOINT: 'https://backup.example.test',
+    S3_ACCESS_KEY_ID: 'fake-id', S3_SECRET_ACCESS_KEY: 'fake-secret' };
+  await runBackup(env, 'questions-backup');
+  assert.match(privateBackup, /متن محرمانهٔ پرسش/);
+  const telegram = await store.one("SELECT payload FROM outbox WHERE method='sendDocument'");
+  const telegramBackup = JSON.parse(JSON.parse(telegram.payload)._documentText);
+  assert.equal('event_questions' in telegramBackup.tables, false);
+  assert.equal('event_question_settings' in telegramBackup.tables, false);
+
+  const source = join(directory, 'backup.json'), output = join(directory, 'restore.sql');
+  writeFileSync(source, privateBackup);
+  const result = spawnSync('python', [fileURLToPath(new URL('../scripts/restore-backup.py', import.meta.url)), source, output], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  restored.exec(readFileSync(output, 'utf8'));
+  const restoredStore = new Store(restored);
+  assert.equal((await restoredStore.getEventQuestionSettings(event.id)).enabled, 1);
+  assert.deepEqual((await restoredStore.selectedEventQuestions(event.id)).map(row => ({ ...row })),
+    [{ question: 'متن محرمانهٔ پرسش', topic: 'صنعت' }]);
+});
+
 test('daily backup filename has only project name and date', async () => {
   const db = createDatabase(); db.exec(schema);
   await runBackup({ DB: db, BACKUP_CHAT: '-100456' }, 'manual:2026-11-14', new Date('2026-11-13T21:16:00Z'));
