@@ -208,6 +208,33 @@ export class Store {
   async listEvents({ activeOnly = false, limit = 100, offset = 0 } = {}) {
     return this.all(`${this.eventSelect()} WHERE e.archived=0 ${activeOnly ? 'AND e.active=1' : ''} ORDER BY e.id DESC LIMIT ? OFFSET ?`, ...paging(limit, offset));
   }
+  async listEventsWithRegistrationStats({ limit = 100, offset = 0 } = {}) {
+    return this.all(`WITH page AS (
+      SELECT * FROM events WHERE archived=0 ORDER BY id DESC LIMIT ? OFFSET ?
+    ), reservations AS (
+      SELECT o.event_id, SUM(o.quantity) AS occupied,
+        SUM(CASE WHEN o.status='approved' THEN o.quantity ELSE 0 END) AS approved_tickets,
+        COUNT(DISTINCT CASE WHEN o.status='approved' THEN o.user_id END) AS registered_users
+      FROM page e JOIN orders o ON o.event_id=e.id
+      WHERE ${OCCUPIED}
+      GROUP BY o.event_id
+    ), attendance AS (
+      SELECT o.event_id, COUNT(*) AS checked_in_tickets
+      FROM page e JOIN orders o ON o.event_id=e.id
+      JOIN tickets t ON t.order_id=o.id
+      WHERE o.status='approved' AND t.checked_in_at IS NOT NULL
+      GROUP BY o.event_id
+    )
+    SELECT e.*,p.name AS place_name,p.address AS place_address,p.map_url AS place_map_url,
+      COALESCE(r.occupied,0) AS occupied, e.capacity-COALESCE(r.occupied,0) AS remaining,
+      COALESCE(r.registered_users,0) AS registered_users, COALESCE(r.approved_tickets,0) AS approved_tickets,
+      COALESCE(r.occupied-r.approved_tickets,0) AS held_tickets, COALESCE(a.checked_in_tickets,0) AS checked_in_tickets
+    FROM page e
+    LEFT JOIN places p ON p.id=e.place_id
+    LEFT JOIN reservations r ON r.event_id=e.id
+    LEFT JOIN attendance a ON a.event_id=e.id
+    ORDER BY e.id DESC`, ...paging(limit, offset));
+  }
   async listEventSummaries({ limit = 100, offset = 0 } = {}) {
     return this.all('SELECT id,name,active FROM events WHERE archived=0 ORDER BY id DESC LIMIT ? OFFSET ?', ...paging(limit, offset));
   }

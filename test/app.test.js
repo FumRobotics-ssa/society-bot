@@ -35,6 +35,55 @@ test('role revocation immediately invalidates existing sessions and checkin role
   assert.equal((await request('/api/me', { headers: { Cookie: auth } })).status, 200);
   await store.removeAdmin(7); assert.equal((await request('/api/me', { headers: { Cookie: auth } })).status, 401); db.close();
 });
+test('event statistics count distinct registrants, checked-in tickets and live reservations', async t => {
+  const { db, store, request } = fixture();
+  t.after(() => db.close());
+  for (let id = 1; id <= 5; id++) await store.upsertUser({ id, phone: '09123456789' });
+  const event = await store.saveEvent({ name: 'کارگاه', capacity: 12, max_per_user: 5, is_paid: 1, price: 1000 });
+  const empty = await store.saveEvent({ name: 'رویداد آینده', capacity: 3 });
+  const archived = await store.saveEvent({ name: 'بایگانی', capacity: 10 });
+  await store.deleteEvent(archived.id);
+
+  const approve = async (userId, quantity, key) => {
+    const { order, tickets } = await store.reserve(userId, event.id, quantity, key);
+    await store.submitReceipt(order.id, userId, 'receipt-' + key);
+    await store.reviewOrder(order.id, true, 99);
+    return tickets;
+  };
+  const tickets = await approve(1, 2, 'first');
+  await approve(1, 1, 'second');
+  await approve(2, 2, 'another-user');
+  for (const ticket of tickets) await store.checkIn(ticket.token, 99);
+  const pending = await store.reserve(3, event.id, 2, 'pending');
+  await store.submitReceipt(pending.order.id, 3, 'pending-receipt');
+  await store.reserve(4, event.id, 1, 'held');
+  const expired = await store.reserve(5, event.id, 2, 'expired');
+  await db.prepare('UPDATE orders SET expires_at=unixepoch()-1 WHERE id=?').bind(expired.order.id).run();
+
+  const path = '/api/events?limit=1';
+  assert.equal((await request(path)).status, 401);
+  await store.setAdmin(7, 'checkin');
+  assert.equal((await request(path, { headers: { Cookie: await cookie(db, 7) } })).status, 403);
+  const headers = { Cookie: await cookie(db, 99) };
+  const firstPage = await request(path, { headers });
+  assert.equal(firstPage.status, 200);
+  const [emptyStats] = await firstPage.json();
+  assert.equal(emptyStats.id, empty.id);
+  assert.equal(emptyStats.remaining, empty.capacity);
+  assert.equal(emptyStats.registered_users, 0);
+  assert.equal(emptyStats.checked_in_tickets, 0);
+
+  const secondPage = await request(path + '&offset=1', { headers });
+  assert.equal(secondPage.status, 200);
+  const [stats] = await secondPage.json();
+  assert.equal(stats.id, event.id);
+  assert.equal(stats.registered_users, 2);
+  assert.equal(stats.approved_tickets, 5);
+  assert.equal(stats.checked_in_tickets, 2);
+  assert.equal(stats.held_tickets, 3);
+  assert.equal(stats.occupied, 8);
+  assert.equal(stats.remaining, 4);
+});
 test('public ticket needs unpredictable token and reveals no name or phone', async () => {
   const { db, store, request } = fixture(); await store.upsertUser({ id: 1, first_name: 'PrivateName', phone: '09123456789' });
   const event = await store.saveEvent({ name: '<script>bad</script>', capacity: 2 });
