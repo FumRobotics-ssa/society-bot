@@ -18,7 +18,10 @@ const eventQuestionButton = eventId => ({ text: 'پرسش از مهمان', call
 const MESSAGE_LIMIT = 4000;
 const CAPTION_LIMIT = 1024;
 const ACCOUNT_REQUIRED = '👤 برای ادامه به حساب کاربری نیاز دارید.\n\nبرای ساخت حساب، /add_account را بفرستید.';
-const STUDENT_NUMBER_NOTE = 'این شماره را خودتان اعلام می‌کنید و از دانشگاه استعلام نمی‌شود.';
+const STUDENT_NUMBER_PROMPT = '🎓 شمارهٔ دانشجویی فردوسی را بفرستید.';
+const notFumKeyboard = updateId => ({
+  inline_keyboard: [[{ text: 'دانشجوی فردوسی نیستم', callback_data: `fum:no:${updateId}` }]],
+});
 const STUDENT_RATE_NOTE = 'این تعرفه بر اساس اطلاعات خوداظهاری حساب شماست و از دانشگاه استعلام نمی‌شود.';
 const PAYMENT_INSTRUCTIONS = 'اطلاعات واریز در توضیحات رویداد آمده است.';
 const UNKNOWN_COMMAND = 'این دستور موجود نیست یا اجازه اجرای آن را ندارید';
@@ -71,9 +74,6 @@ function name(value) {
   return text;
 }
 function money(value) { return Number(value || 0).toLocaleString('fa-IR'); }
-function studentNumberPrompt(exactLength) {
-  return paragraphs('🎓 شمارهٔ دانشجویی فردوسی', `شمارهٔ دانشجویی ${money(exactLength)} رقمی خود را وارد کنید. ${STUDENT_NUMBER_NOTE}`);
-}
 function invalidStudentNumber(exactLength) {
   return new Error(`شمارهٔ دانشجویی را با ${money(exactLength)} رقم وارد کنید. صفرهای ابتدای شماره را هم بنویسید.`);
 }
@@ -338,8 +338,7 @@ export async function handleUpdate(update, env, store) {
   }, paragraphs('👤 ساخت حساب کاربری', eventId && 'پس از ساخت حساب، ثبت‌نام همین رویداد را ادامه می‌دهید.', FULL_NAME_PROMPT));
   const promptFumStudentNumber = async (eventId = null, chooseStudentTariff = false) => transition('fum_student_number',
     { event_id: eventId ? Number(eventId) : null, choose_student_tariff: chooseStudentTariff },
-    paragraphs(studentNumberPrompt(configuredStudentNumberLength(env.FUM_STUDENT_NUMBER_LENGTH)),
-      'برای انصراف، /cancel را بفرستید.'));
+    STUDENT_NUMBER_PROMPT, notFumKeyboard(update.update_id));
   const saveFumStudentNumber = async (value, data = {}) => {
     const user = await needAccount();
     if (!user) return;
@@ -390,6 +389,23 @@ export async function handleUpdate(update, env, store) {
       if (chat.type !== 'private') return answer('این گزینه از گفت‌وگوی خصوصی ربات در دسترس است');
       const register = /^register:(\d{1,15})$/.exec(data);
       if (register) { await selectEvent(register[1], { begin: true }); return answer(); }
+      const notFum = /^fum:no:(\d{1,15})$/.exec(data);
+      if (notFum) {
+        const state = await store.getState(from.id);
+        const current = stateData(state);
+        if (String(current.last_update_id) !== notFum[1] || !['signup:student_number', 'fum_student_number'].includes(state?.step)) {
+          return answer('این انتخاب دیگر فعال نیست');
+        }
+        if (state.step === 'signup:student_number') {
+          await signupStep('student_number', 'not_fum', current, true);
+        } else {
+          await store.upsertUser({ id: from.id, profile: { is_fum_student: false } });
+          await store.enqueue('editMessageReplyMarkup', { chat_id: chat.id, message_id: callback.message.message_id, reply_markup: { inline_keyboard: [] } }, `${updateKey}:student_choice`);
+          if (current.event_id) await selectEvent(current.event_id, { afterSignup: true });
+          else await transition('idle', {}, 'وضعیت دانشجویی فردوسی در حساب شما به «خیر» تغییر کرد.', MENU);
+        }
+        return answer('پاسخ «خیر» ثبت شد');
+      }
       const tariff = /^tariff:([yn]):(\d{1,15})$/.exec(data);
       if (tariff) {
         const state = await store.getState(from.id);
@@ -955,18 +971,23 @@ export async function handleUpdate(update, env, store) {
     if (step === 'is_fum_student') {
       p.is_fum_student = bool();
       if (p.is_fum_student) {
-        Object.assign(p, { is_student: true, is_mashhad_student: true, university_name: 'دانشگاه فردوسی مشهد', is_graduate_student: false, is_student_relative: false });
-        return next('student_number', studentNumberPrompt(configuredStudentNumberLength(env.FUM_STUDENT_NUMBER_LENGTH)));
+        return next('student_number', STUDENT_NUMBER_PROMPT, notFumKeyboard(update.update_id));
       }
       return askYesNo('is_student', 'دانشجو هستید؟');
     }
     if (step === 'student_number') {
+      if (isCallback && input === 'not_fum') {
+        p.is_fum_student = false;
+        // Earlier signup sessions prefilled these values before asking for the number.
+        for (const field of ['is_student', 'is_mashhad_student', 'university_name', 'is_graduate_student', 'is_student_relative']) delete p[field];
+        return askYesNo('is_student', 'دانشجو هستید؟');
+      }
       const number = normalizeStudentNumber(input);
       const exactLength = configuredStudentNumberLength(env.FUM_STUDENT_NUMBER_LENGTH);
       if (isCallback || !isValidStudentNumber(number, exactLength)) {
         throw invalidStudentNumber(exactLength);
       }
-      p.student_number = number;
+      Object.assign(p, { student_number: number, is_student: true, is_mashhad_student: true, university_name: 'دانشگاه فردوسی مشهد', is_graduate_student: false, is_student_relative: false });
       return next('fum_faculty', 'دانشکده‌تان را از فهرست انتخاب کنید.', { inline_keyboard: FACULTIES.map((f, i) => [{ text: f, callback_data: `s:f${i}` }]) });
     }
     if (step === 'fum_faculty') {
