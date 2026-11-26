@@ -568,8 +568,19 @@ export class Store {
     return { cancelled: result.meta.changes };
   }
   async expireOrders() {
-    const r = await this.run("UPDATE orders SET status='expired',updated_at=unixepoch() WHERE status IN ('reserved','pending') AND expires_at<=unixepoch()");
-    return { expired: r.meta.changes };
+    const cutoff = Math.floor(Date.now() / 1000);
+    const notice = '⏳ مهلت ارسال رسید برای «%s» تمام شد و جای رزروشده آزاد شد.\n\nاگر مبلغ را واریز کرده‌اید، برای پیگیری با برگزارکننده تماس بگیرید. اگر هنوز پرداخت نکرده‌اید، می‌توانید از «رویدادها» دوباره برای ثبت‌نام اقدام کنید.';
+    const [, expired] = await this.db.batch([
+      this.stmt(`INSERT INTO outbox(id,method,payload,dedupe_key)
+        SELECT 'receipt-expired:' || o.id,'sendMessage',json_object('chat_id',o.user_id,'text',printf(?,e.name)),
+          'receipt-expired:' || o.id
+        FROM orders o JOIN users u ON u.id=o.user_id JOIN events e ON e.id=o.event_id
+        WHERE o.status='reserved' AND o.expires_at<=? AND u.is_deleted=0
+        ON CONFLICT(dedupe_key) DO NOTHING`, notice, cutoff),
+      this.stmt(`UPDATE orders SET status='expired',updated_at=unixepoch()
+        WHERE status IN ('reserved','pending') AND expires_at<=?`, cutoff),
+    ]);
+    return { expired: expired.meta.changes };
   }
   async listAdmins() { return this.all('SELECT * FROM admins ORDER BY user_id'); }
   async getAdmin(userId) { return this.one('SELECT * FROM admins WHERE user_id=?', Number(userId)); }
