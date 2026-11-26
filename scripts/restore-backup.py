@@ -21,7 +21,7 @@ spec.loader.exec_module(legacy)
 BASE_FIELDS = {
     "users": "id username first_name last_name phone profile_json is_deleted created_at updated_at",
     "places": "id name address capacity created_at map_url",
-    "events": "id name description place_id capacity max_per_user is_paid price pricing_mode fum_student_price payment_instructions starts_at active archived created_at updated_at poster_url confirmation_message",
+    "events": "id name description place_id capacity max_per_user is_paid price pricing_mode fum_student_price payment_instructions starts_at ends_at active archived created_at updated_at poster_url confirmation_message",
     "orders": "id request_key user_id event_id quantity unit_price pricing_group status expires_at receipt_file_id receipt_type receipt_key reviewed_by reviewed_at created_at updated_at",
     "tickets": "id token checkin_code legacy_code order_id checked_in_at checked_in_by created_at",
     "admins": "user_id role created_at",
@@ -83,6 +83,8 @@ def validate_snapshot(snapshot, include_admins=False):
                     row = {**row, "poster_url": ""}
                 if "confirmation_message" not in row:
                     row = {**row, "confirmation_message": ""}
+                if "ends_at" not in row:
+                    row = {**row, "ends_at": ""}
             if table == "event_question_settings" and isinstance(row, dict) and "max_questions" not in row:
                 row = {**row, "max_questions": 3}
             if table == "orders" and isinstance(row, dict) and set(row) == OLD_ORDER_FIELDS:

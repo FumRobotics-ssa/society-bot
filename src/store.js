@@ -290,17 +290,24 @@ export class Store {
     const price = pricingMode === 'differentiated' ? submittedPrice : paid ? submittedPrice : 0;
     const startsAt = string(v.starts_at, 'زمان رویداد', 100);
     if (startsAt && !Number.isFinite(Date.parse(startsAt))) throw domainError('INVALID_INPUT', 'زمان رویداد معتبر نیست');
+    const endsAt = string(v.ends_at, 'زمان پایان رویداد', 100);
+    if (endsAt) {
+      const endTime = Date.parse(endsAt);
+      if (!Number.isFinite(endTime)) throw domainError('INVALID_INPUT', 'زمان پایان رویداد معتبر نیست');
+      if (!startsAt) throw domainError('INVALID_INPUT', 'برای ثبت زمان پایان، زمان شروع را هم مشخص کنید');
+      if (endTime <= Date.parse(startsAt)) throw domainError('INVALID_INPUT', 'زمان پایان باید بعد از زمان شروع باشد');
+    }
     const posterUrl = string(v.poster_url || '', 'پوستر رویداد', 500000);
     const values = [string(v.name, 'نام رویداد', 200, true), string(v.description, 'توضیحات', 3500), placeId, capacity,
       int(v.max_per_user, 'سقف هر نفر', 100), paid, price, pricingMode, fumStudentPrice,
-      string(v.payment_instructions, 'دستور پرداخت', 1500), startsAt, posterUrl, flag(v.active)];
+      string(v.payment_instructions, 'دستور پرداخت', 1500), startsAt, endsAt, posterUrl, flag(v.active)];
     const settings = data.question_settings === undefined ? null : questionSettingsValues(data.question_settings);
     const event = id
       ? this.stmt(`UPDATE events SET name=?,description=?,place_id=?,capacity=?,max_per_user=?,is_paid=?,price=?,
-        pricing_mode=?,fum_student_price=?,payment_instructions=?,starts_at=?,poster_url=?,active=?,updated_at=unixepoch()
+        pricing_mode=?,fum_student_price=?,payment_instructions=?,starts_at=?,ends_at=?,poster_url=?,active=?,updated_at=unixepoch()
         WHERE id=?${settings ? ' AND archived=0' : ''}`, ...values, Number(id))
-      : this.stmt(`INSERT INTO events(name,description,place_id,capacity,max_per_user,is_paid,price,pricing_mode,fum_student_price,payment_instructions,starts_at,poster_url,active)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, ...values);
+      : this.stmt(`INSERT INTO events(name,description,place_id,capacity,max_per_user,is_paid,price,pricing_mode,fum_student_price,payment_instructions,starts_at,ends_at,poster_url,active)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, ...values);
     let saved, savedSettings;
     try {
       if (settings) {
