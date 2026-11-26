@@ -95,7 +95,7 @@ test('a public event link resumes an existing signup and then opens the same eve
   assert.equal((await f.store.listOrders())[0].event_id, other.id);
 });
 
-test('event details show the optional end time and reserve the id and remaining capacity for admins', async t => {
+test('event details show the optional end time and keep event identifiers and capacity private', async t => {
   const f = setup();
   t.after(() => f.db.close());
   await f.store.upsertUser({ id: 1, phone: '09123456789' });
@@ -117,10 +117,13 @@ test('event details show the optional end time and reserve the id and remaining 
   const caption = participantReplies.find(reply => reply.caption?.includes(withPoster.name)).caption;
   assert.match(caption, /^🕒 زمان برگزاری اعلام نشده$/m);
   for (const reply of participantReplies) {
-    assert.doesNotMatch(reply.text || reply.caption, /ظرفیت باقی‌مانده|شناسه:/);
+    const message = reply.text || reply.caption;
+    assert.doesNotMatch(message, /^(?:ظرفیت(?: باقی‌مانده)?|شناسه):/m);
+    assert.match(message, /^سقف بلیت برای هر نفر:/m);
   }
   const adminDetails = replies.find(reply => reply.chat_id === 99).text;
   assert.match(adminDetails, new RegExp(`شناسه: ${event.id}`));
+  assert.match(adminDetails, /^ظرفیت: 7$/m);
   assert.match(adminDetails, /ظرفیت باقی‌مانده: 6/);
 });
 test('registered attendees can submit a private question once per update and resume their prior step', async t => {
@@ -536,7 +539,7 @@ test('long poster details preserve the description, venue and booking instructio
   assert.ok(intro.text.endsWith(description));
   assert.ok(booking.text.includes(place.address));
   assert.match(booking.text, /\n\nتعداد بلیت مورد نظر را وارد کنید\.\nبرای انصراف، \/cancel/);
-  assert.doesNotMatch(booking.text, /ظرفیت باقی‌مانده/);
+  assert.doesNotMatch(booking.text, /^ظرفیت(?: باقی‌مانده)?:/m);
   assert.equal(booking.reply_markup.inline_keyboard[0][0].callback_data, `eq:${event.id}`);
   assert.equal((await f.store.getState(1)).step, 'reserve_quantity');
 });

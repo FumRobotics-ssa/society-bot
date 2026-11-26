@@ -116,7 +116,7 @@ function eventText(event, { forAdmin = false, includeDescription = true } = {}) 
   ].filter(Boolean).join('\n');
   const registration = [
     forAdmin ? `شناسه: ${event.id}` : '',
-    `ظرفیت: ${event.capacity}`,
+    forAdmin ? `ظرفیت: ${event.capacity}` : '',
     forAdmin && event.remaining != null ? `ظرفیت باقی‌مانده: ${event.remaining}` : '',
     `سقف بلیت برای هر نفر: ${event.max_per_user}`,
     `وضعیت ثبت‌نام: ${event.registration_open ? 'فعال' : 'غیرفعال'}`,
