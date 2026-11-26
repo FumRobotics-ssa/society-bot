@@ -73,17 +73,18 @@ test('a public event link resumes an existing signup and then opens the same eve
   assert.match(preview.text, /۱۲ آذر ۱۴۰۵/);
   assert.equal(preview.reply_markup.inline_keyboard[0][0].callback_data, 'register:' + other.id);
   await f.click('register:' + other.id);
-  assert.equal((await f.store.getState(1)).step, 'signup:first_name');
+  assert.equal((await f.store.getState(1)).step, 'signup:full_name');
   await f.send('علی');
+  assert.equal((await f.store.getState(1)).step, 'signup:full_name');
+  await f.send('علی  محمدی راد');
   await f.send('/start getTicket_' + event.id);
-  assert.equal((await f.store.getState(1)).step, 'signup:last_name');
+  assert.equal((await f.store.getState(1)).step, 'signup:phone');
   await f.click('register:' + event.id);
-  await f.send('محمدی');
   await handleUpdate(f.message('', { contact: { user_id: 1, phone_number: '09123456789' } }), f.env, f.store);
   const state = await f.store.getState(1);
   assert.equal(state.step, 'reserve_quantity');
   assert.equal(JSON.parse(state.data_json).event_id, event.id);
-  assert.equal((await f.store.getUser(1)).first_name, 'علی');
+  assert.equal((await f.store.getUser(1)).full_name, 'علی محمدی راد');
   assert.equal((await f.store.getUser(1)).profile.student_number, undefined);
   assert.equal((await f.store.listOrders()).length, 0);
   await f.send('/start getTicket_' + other.id);
@@ -185,8 +186,7 @@ test('event links reject invalid or closed events and handle an event closing du
   await f.send('/start getTicket_' + event.id);
   await f.click('register:' + event.id);
   await f.store.deleteEvent(event.id);
-  await f.send('علی');
-  await f.send('محمدی');
+  await f.send('علی محمدی');
   await handleUpdate(f.message('', { contact: { user_id: 1, phone_number: '09123456789' } }), f.env, f.store);
   assert.equal((await f.store.getState(1)).step, 'idle');
   assert.equal((await f.store.getUser(1)).phone, '09123456789');
@@ -209,8 +209,7 @@ test('short event signup requests a student number only for the Ferdowsi tariff'
   for (const id of [1, 2]) {
     await send(id, '/start getTicket_' + event.id);
     await click(id, 'register:' + event.id);
-    await send(id, 'علی');
-    await send(id, 'محمدی');
+    await send(id, 'علی محمدی');
     await contact(id);
     assert.equal((await f.store.getState(id)).step, 'choose_event_tariff');
   }
@@ -233,13 +232,24 @@ test('short event signup requests a student number only for the Ferdowsi tariff'
   assert.equal((await f.store.quoteOrder(2, event.id, 1)).unit_price, 25000);
   assert.equal((await f.store.listOrders()).length, 0);
 });
-test('complete signup persists profile and rejects another persons contact', async () => {
-  const f = setup(); await f.send('/add_account'); await f.send('علی'); await f.send('محمدی');
+test('complete signup persists the full name and rejects another persons contact', async () => {
+  const f = setup(); await f.send('/add_account'); await f.send('علی محمدی');
   await handleUpdate(f.message('', { contact: { user_id: 2, phone_number: '09123456789' } }), f.env, f.store);
   assert.equal((await f.store.getState(1)).step, 'signup:phone');
   await handleUpdate(f.message('', { contact: { user_id: 1, phone_number: '09123456789' } }), f.env, f.store);
   await f.click('s:boy'); await f.click('s:no'); await f.click('s:no'); await f.click('s:no'); await f.click('s:no'); await f.click('s:yes');
-  const user = await f.store.getUser(1); assert.equal(user.first_name, 'علی'); assert.equal(user.phone, '09123456789'); assert.equal(user.profile.is_student, false); f.db.close();
+  const user = await f.store.getUser(1); assert.equal(user.full_name, 'علی محمدی'); assert.equal(user.phone, '09123456789'); assert.equal(user.profile.is_student, false); f.db.close();
+});
+test('a signup previously awaiting a surname can finish without restarting', async t => {
+  const f = setup();
+  t.after(() => f.db.close());
+  const event = await f.store.saveEvent({ name: 'کارگاه', capacity: 2 });
+  await f.store.setState(1, 'signup:last_name', { first_name: 'علی', registration_event_id: event.id, quick_signup: true });
+  await f.send('محمدی');
+  await handleUpdate(f.message('', { contact: { user_id: 1, phone_number: '09123456789' } }), f.env, f.store);
+  assert.equal((await f.store.getState(1)).step, 'reserve_quantity');
+  await f.send('/get_account');
+  assert.ok(await f.store.one("SELECT 1 FROM outbox WHERE method='sendMessage' AND payload LIKE '%نام و نام خانوادگی: علی محمدی%'"));
 });
 test('a confirmation opened before the registration cutoff cannot reserve after it', async t => {
   const f = setup();
@@ -412,8 +422,7 @@ test('daily backup catches up after midnight and queues only once per UTC day', 
 test('signup choice closes its keyboard and confirms the selected value', async () => {
   const f = setup();
   await f.send('/add_account');
-  await f.send('علی');
-  await f.send('محمدی');
+  await f.send('علی محمدی');
   await handleUpdate(f.message('', { contact: { user_id: 1, phone_number: '09123456789' } }), f.env, f.store);
   const choice = f.callback('s:boy');
   choice.callback_query.message.text = 'جنسیت را انتخاب کنید';

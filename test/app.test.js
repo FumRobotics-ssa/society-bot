@@ -40,6 +40,8 @@ test('event statistics count distinct registrants, checked-in tickets and live r
   const { db, store, request } = fixture();
   t.after(() => db.close());
   for (let id = 1; id <= 5; id++) await store.upsertUser({ id, phone: '09123456789' });
+  await store.upsertUser({ id: 1, full_name: 'سارا احمدی راد' });
+  await store.upsertUser({ id: 2, first_name: 'رضا', last_name: 'کریمی' });
   const event = await store.saveEvent({ name: 'کارگاه', capacity: 12, max_per_user: 5, is_paid: 1, price: 1000 });
   const empty = await store.saveEvent({ name: 'رویداد آینده', capacity: 3 });
   const archived = await store.saveEvent({ name: 'بایگانی', capacity: 10 });
@@ -94,8 +96,10 @@ test('event statistics count distinct registrants, checked-in tickets and live r
   const exported = await request(selectedPath, { headers });
   assert.match(exported.headers.get('Content-Disposition'), /confirmed-participants.csv/);
   const selectedRows = (await exported.text()).split('\r\n');
-  assert.equal(selectedRows[0], '"id","first_name","last_name","username","phone"');
+  assert.equal(selectedRows[0], '"id","first_name","last_name","username","phone","full_name"');
   assert.deepEqual(selectedRows.slice(1).map(row => row.split(',')[0]).sort(), ['"1"', '"2"']);
+  assert.ok(selectedRows.find(row => row.startsWith('"1",')).endsWith('"سارا احمدی راد"'));
+  assert.ok(selectedRows.find(row => row.startsWith('"2",')).endsWith('"رضا کریمی"'));
   const allRows = (await (await request(exportPath, { headers })).text()).split('\r\n');
   assert.deepEqual(allRows.slice(1).map(row => row.split(',')[0]).sort(), ['"1"', '"2"', '"5"']);
 });
@@ -342,12 +346,17 @@ test('payment support connects the bot thread to an admin-only inbox, with one o
 });
 
 test('public ticket needs unpredictable token and reveals no name or phone', async () => {
-  const { db, store, request } = fixture(); await store.upsertUser({ id: 1, first_name: 'PrivateName', phone: '09123456789' });
+  const { db, store, request } = fixture(); await store.upsertUser({ id: 1, full_name: 'PrivateName Example', phone: '09123456789' });
   const event = await store.saveEvent({ name: '<script>bad</script>', capacity: 2 });
   const { tickets } = await store.reserve(1, event.id, 1, 'first'); const ticket = tickets[0];
   assert.equal((await request('/ticket/' + ticket.id)).status, 404);
   const page = await request('/ticket/' + ticket.token); const text = await page.text();
   assert.equal(page.status, 200); assert.ok(!text.includes('PrivateName')); assert.ok(!text.includes('09123456789')); assert.ok(!text.includes('<script>'));
+  const headers = { Cookie: await cookie(db, 99) };
+  const printed = await request('/api/print?eventId=' + event.id, { headers });
+  assert.match(await printed.text(), /PrivateName Example/);
+  const search = await request('/api/users?search=PrivateName%20Example', { headers });
+  assert.deepEqual((await search.json()).map(user => user.full_name), ['PrivateName Example']);
   const image = await request('/ticket/' + ticket.token + '/qr.svg'); assert.equal(image.status, 200); assert.match(await image.text(), /<svg/); db.close();
 });
 test('Neshan location appears on issued ticket and invalid links are rejected', async () => {

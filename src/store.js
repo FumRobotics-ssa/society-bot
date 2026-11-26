@@ -2,10 +2,15 @@ import { configuredStudentNumberLength, normalizeDigits, resolveEventPricing } f
 
 export const SUPPORT_CONTACT = 'به اکانت پشتیبانی انجمن رباتیک دانشگاه فردوسی مشهد @FUMrs_admin پیام بدهید.';
 export const SUPPORT_STATUSES = { new: 'جدید', in_review: 'در حال بررسی', waiting_user: 'منتظر پاسخ شما', closed: 'بسته' };
+const USER_FULL_NAME = "COALESCE(NULLIF(u.full_name,''),trim(u.first_name || ' ' || u.last_name))";
 const SUPPORT_TICKET = `SELECT s.*, o.user_id, o.status AS order_status, o.quantity, o.unit_price,
-  e.name AS event_name, u.first_name, u.last_name
+  e.name AS event_name, u.first_name, u.last_name, ${USER_FULL_NAME} AS full_name
   FROM support_tickets s JOIN orders o ON o.id=s.order_id JOIN events e ON e.id=o.event_id
   JOIN users u ON u.id=o.user_id`;
+
+export function displayName(user) {
+  return user.full_name || [user.first_name, user.last_name].filter(Boolean).join(' ');
+}
 
 const OCCUPIED = "(status='approved' OR (status IN ('reserved','pending') AND expires_at>unixepoch()))";
 const REGISTRATION_OPEN = 'e.archived=0 AND e.active=1 AND (e.registration_closes_at IS NULL OR e.registration_closes_at>unixepoch())';
@@ -112,16 +117,18 @@ export class Store {
     if (profile.student_number != null) profile.student_number = String(normalizeDigits(profile.student_number)).trim();
     const json = JSON.stringify(profile);
     if (json.length > 20000) throw domainError('INVALID_INPUT', 'اطلاعات حساب بیش از حد طولانی است');
-    await this.run(`INSERT INTO users(id,username,first_name,last_name,phone,profile_json) VALUES(?,?,?,?,?,?)
+    await this.run(`INSERT INTO users(id,username,first_name,last_name,phone,profile_json,full_name) VALUES(?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET username=excluded.username,first_name=excluded.first_name,
-      last_name=excluded.last_name,phone=excluded.phone,profile_json=excluded.profile_json,is_deleted=0,updated_at=unixepoch()`,
+      last_name=excluded.last_name,phone=excluded.phone,profile_json=excluded.profile_json,
+      full_name=excluded.full_name,is_deleted=0,updated_at=unixepoch()`,
       id, string(merged.username, 'نام کاربری', 64), string(merged.first_name, 'نام', 100),
-      string(merged.last_name, 'نام خانوادگی', 100), string(merged.phone, 'تلفن', 30), json);
+      string(merged.last_name, 'نام خانوادگی', 100), string(merged.phone, 'تلفن', 30), json,
+      string(merged.full_name, 'نام و نام خانوادگی', 160));
     return this.getUser(id);
   }
   async deleteUser(id) {
     await this.db.batch([
-      this.stmt("UPDATE users SET username='',first_name='کاربر حذف شده',last_name='',phone='',profile_json='{}',is_deleted=1,updated_at=unixepoch() WHERE id=?", Number(id)),
+      this.stmt("UPDATE users SET username='',first_name='کاربر حذف شده',last_name='',full_name='',phone='',profile_json='{}',is_deleted=1,updated_at=unixepoch() WHERE id=?", Number(id)),
       this.stmt('DELETE FROM conversation_states WHERE user_id=?', Number(id)),
     ]);
     return { deleted: true };
@@ -133,7 +140,7 @@ export class Store {
       const pattern = `%${term}%`;
       const fields = [
         'CAST(u.id AS TEXT)', 'LOWER(u.username)', 'LOWER(u.first_name)', 'LOWER(u.last_name)',
-        "LOWER(u.first_name || ' ' || u.last_name)", 'u.phone',
+        `LOWER(${USER_FULL_NAME})`, 'u.phone',
         "CAST(json_extract(u.profile_json,'$.student_number') AS TEXT)",
         "LOWER(json_extract(u.profile_json,'$.student_major'))",
         "LOWER(json_extract(u.profile_json,'$.fum_faculty'))",
@@ -165,7 +172,7 @@ export class Store {
         OR EXISTS (SELECT 1 FROM legacy_event_participants ep WHERE ep.user_id=u.id))`);
     }
     if (confirmedOnly) {
-      return this.all(`SELECT u.id,u.first_name,u.last_name,u.username,u.phone
+      return this.all(`SELECT u.id,u.first_name,u.last_name,u.username,u.phone,${USER_FULL_NAME} AS full_name
         FROM users u WHERE ${where.join(' AND ')} ORDER BY u.created_at DESC,u.id LIMIT ? OFFSET ?`,
         ...values, ...paging(limit, offset));
     }
@@ -179,7 +186,8 @@ export class Store {
       )`;
     return (await this.all(`SELECT u.*,${eventNames}) AS event_names
       FROM users u WHERE ${where.join(' AND ')}
-      ORDER BY u.created_at DESC,u.id LIMIT ? OFFSET ?`, ...values, ...paging(limit, offset))).map(userRow);
+      ORDER BY u.created_at DESC,u.id LIMIT ? OFFSET ?`, ...values, ...paging(limit, offset)))
+      .map(row => ({ ...userRow(row), full_name: displayName(row) }));
   }
   async listAudienceEvents({ limit = 1000, offset = 0 } = {}) {
     const events = await this.all(`SELECT audience_key,id,name,kind,participant_count FROM (
@@ -408,7 +416,7 @@ export class Store {
     return `SELECT o.*,e.name AS event_name,e.description AS event_description,e.payment_instructions,e.starts_at,
       ${QUESTION_WINDOW} AS questions_open,
       e.is_paid,e.price,e.capacity,e.max_per_user,p.name AS place_name,p.address AS place_address,p.map_url AS place_map_url,
-      u.first_name,u.last_name,u.phone,u.username FROM orders o JOIN events e ON e.id=o.event_id
+      u.first_name,u.last_name,u.phone,u.username,${USER_FULL_NAME} AS full_name FROM orders o JOIN events e ON e.id=o.event_id
       JOIN users u ON u.id=o.user_id LEFT JOIN places p ON p.id=e.place_id`;
   }
   async getEventPricing(userId, eventId, exactStudentNumberLength = null, { requirePhone = false, allowGuest = false } = {}) {
@@ -550,7 +558,7 @@ export class Store {
     return `SELECT t.*,o.user_id,o.event_id,o.quantity,o.status AS order_status,o.expires_at,o.unit_price,o.pricing_group,
       CASE WHEN t.checked_in_at IS NOT NULL THEN 'attended' ELSE o.status END AS status,
       e.name AS event_name,e.starts_at,e.poster_url,p.name AS place_name,p.address AS place_address,p.map_url AS place_map_url,
-      u.first_name,u.last_name,u.phone,u.username
+      u.first_name,u.last_name,u.phone,u.username,${USER_FULL_NAME} AS full_name
       FROM tickets t JOIN orders o ON o.id=t.order_id JOIN events e ON e.id=o.event_id
       JOIN users u ON u.id=o.user_id LEFT JOIN places p ON p.id=e.place_id`;
   }

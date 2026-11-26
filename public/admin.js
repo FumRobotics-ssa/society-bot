@@ -199,7 +199,7 @@ function table(container, headings, rows) {
   });
   t.append(head, body); wrap.append(t); container.replaceChildren(wrap);
 }
-function person(item) { return [item.first_name || item.user_first_name || item.name, item.last_name || item.user_last_name].filter(Boolean).join(' ') || item.user_id || 'کاربر'; }
+function person(item) { return item.full_name || [item.first_name || item.user_first_name || item.name, item.last_name || item.user_last_name].filter(Boolean).join(' ') || item.user_id || 'کاربر'; }
 function eventName(item) { return item.event_name || state.events.find((event) => String(event.id) === String(item.event_id))?.name || 'رویداد'; }
 function userEventLabels(value) {
   const labels = String(value || '').split('، ').filter(Boolean);

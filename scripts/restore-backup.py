@@ -19,7 +19,7 @@ legacy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(legacy)
 
 BASE_FIELDS = {
-    "users": "id username first_name last_name phone profile_json is_deleted created_at updated_at",
+    "users": "id username first_name last_name phone profile_json is_deleted created_at updated_at full_name",
     "places": "id name address capacity created_at map_url",
     "events": "id name description place_id capacity max_per_user is_paid price pricing_mode fum_student_price payment_instructions starts_at ends_at active archived created_at updated_at poster_url confirmation_message registration_closes_at",
     "orders": "id request_key user_id event_id quantity unit_price pricing_group status expires_at receipt_file_id receipt_type receipt_key reviewed_by reviewed_at created_at updated_at",
@@ -77,6 +77,8 @@ def validate_snapshot(snapshot, include_admins=False):
         if not isinstance(rows, list):
             raise ValueError("Expected a list of rows in table " + table)
         for row in rows:
+            if table == "users" and isinstance(row, dict) and "full_name" not in row:
+                row = {**row, "full_name": ""}
             if table == "places" and isinstance(row, dict) and "map_url" not in row:
                 row = {**row, "map_url": ""}  # Accept backups made before the map-link migration.
             if table == "events" and isinstance(row, dict):
