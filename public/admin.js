@@ -232,8 +232,15 @@ function fillFilters() {
   document.querySelectorAll('.audience-event-filter').forEach((select) => {
     const previous = select.value;
     const participantsFilter = select.id === 'users-event';
-    const option = el('option', select.dataset.allLabel || 'همه رویدادها'); option.value = '';
-    select.replaceChildren(option);
+    const placeholder = select.dataset.placeholder;
+    const all = new Option(select.dataset.allLabel || 'همه رویدادها', placeholder ? 'all' : '');
+    if (placeholder) {
+      const prompt = new Option(placeholder, '', true, true);
+      prompt.disabled = true;
+      select.replaceChildren(prompt, all);
+    } else {
+      select.replaceChildren(all);
+    }
     if (participantsFilter) {
       const noEvent = el('option', 'بدون سابقهٔ شرکت در رویداد');
       noEvent.value = 'no-event'; select.append(noEvent);
@@ -244,7 +251,7 @@ function fillFilters() {
       const item = el('option', `${event.name} · ${number(event.participant_count)} نفر${oldLabel}`);
       item.value = event.audience_key; select.append(item);
     });
-    if (participantsFilter && previous === 'no-event') select.value = previous;
+    if (previous === all.value || (participantsFilter && previous === 'no-event')) select.value = previous;
     else if (visibleEvents.some((event) => event.audience_key === previous)) select.value = previous;
   });
   const select = $('event-place'); const old = select.value;
@@ -871,8 +878,26 @@ $('checkin-form').addEventListener('submit', (event) => { event.preventDefault()
 $('camera-start').addEventListener('click', () => action($('camera-start'), startCamera));
 $('camera-stop').addEventListener('click', stopCamera);
 $('broadcast-form').addEventListener('submit', (event) => {
-  event.preventDefault(); const form = event.currentTarget; const data = new FormData(form);
-  action(event.submitter, async () => { const body = { text: data.get('text').trim() }; if (data.get('audience_key')) body.audience_key = data.get('audience_key'); const result = await api('/api/broadcast', { method: 'POST', body }); const count = typeof result.queued === 'number' ? result.queued : result.count; $('broadcast-result').textContent = count !== undefined ? 'پیام برای ' + number(count) + ' دریافت‌کننده در صف قرار گرفت' : 'درخواست ارسال ثبت شد پیام‌ها به تدریج از صف ارسال می‌شوند'; form.elements.namedItem('confirm').checked = false; toast('پیام در صف ارسال قرار گرفت'); });
+  event.preventDefault();
+  const form = event.currentTarget;
+  const data = new FormData(form);
+  const text = data.get('text');
+  const audience = data.get('audience_key');
+  action(event.submitter, async () => {
+    const body = { text: text.trim() };
+    if (audience !== 'all') body.audience_key = audience;
+    const result = await api('/api/broadcast', { method: 'POST', body });
+    const count = typeof result.queued === 'number' ? result.queued : result.count;
+    $('broadcast-result').textContent = count !== undefined
+      ? 'پیام برای ' + number(count) + ' دریافت‌کننده در صف قرار گرفت'
+      : 'درخواست ارسال ثبت شد. پیام‌ها به تدریج از صف ارسال می‌شوند.';
+    if (form.elements.namedItem('text').value === text && form.elements.namedItem('audience_key').value === audience) {
+      form.reset();
+    } else {
+      form.elements.namedItem('confirm').checked = false;
+    }
+    toast('پیام در صف ارسال قرار گرفت');
+  });
 });
 $('admin-form').addEventListener('submit', (event) => { event.preventDefault(); const form = event.currentTarget; const data = new FormData(form); action(event.submitter, async () => { await api('/api/admins', { method: 'POST', body: { user_id: Number(data.get('user_id')), role: data.get('role') } }); form.reset(); await load(); toast('دسترسی ثبت شد'); }); });
 $('expire').addEventListener('click', () => action($('expire'), async () => { const result = await api('/api/expire', { method: 'POST' }); $('expire-result').textContent = 'پاکسازی انجام شد' + (result.expired !== undefined ? ' تعداد رزرو آزادشده ' + number(result.expired) : ''); toast('رزروهای منقضی بررسی شدند'); }));
