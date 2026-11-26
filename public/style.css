@@ -189,8 +189,14 @@ select{
 }
 .event-registration-metrics dt{font-size:11px;color:var(--muted)}
 .event-registration-metrics dd{margin:0;font-weight:700;color:var(--ink)}
-.questions-dialog{width:min(680px,calc(100vw - 24px));max-height:calc(100dvh - 24px);overflow:auto;padding:22px;border:1px solid var(--line);border-radius:14px;background:var(--surface);color:var(--ink)}
-.questions-dialog::backdrop{background:#000a}
+.questions-dialog,.support-dialog{width:min(680px,calc(100vw - 24px));max-height:calc(100dvh - 24px);overflow:auto;padding:22px;border:1px solid var(--line);border-radius:14px;background:var(--surface);color:var(--ink)}
+.questions-dialog::backdrop,.support-dialog::backdrop{background:#000a}
+.support-order{overflow-wrap:anywhere}
+#support-thread{margin-top:16px}
+.support-message{padding:12px;margin-bottom:8px;border:1px solid var(--line);border-radius:8px;background:var(--paper)}
+.support-message small{margin-inline-start:10px}
+.support-message p{margin:8px 0 0}
+.support-message a{margin-top:8px}
 .event-question-settings{min-width:0;margin:20px 0 0;padding:12px 14px 14px;border:1px solid var(--line);border-radius:8px}
 .event-question-settings legend{padding:0 6px;font-weight:700}
 #questions-options{margin-top:14px}

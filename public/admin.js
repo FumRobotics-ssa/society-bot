@@ -2,8 +2,9 @@ import { formatEventSchedule, formatJalaliDate, jalaliFirstWeekday, jalaliMonthL
 
 /* Admin credentials live only in an HttpOnly server session; no persistent browser tokens. */
 const $ = (id) => document.getElementById(id);
-const state = { me: null, view: 'overview', events: [], audienceEvents: [], places: [], camera: null, timer: null, loading: 0, pages: { orders: 0, tickets: 0, users: 0 } };
-const titles = { overview: 'نمای کلی', events: 'رویدادها', places: 'مکان‌ها', orders: 'بررسی پرداخت‌ها', tickets: 'بلیت‌ها', checkin: 'ثبت ورود', users: 'شرکت‌کنندگان', broadcast: 'پیام‌رسانی', admins: 'مدیران', settings: 'داده‌ها و پشتیبان' };
+const state = { me: null, view: 'overview', events: [], audienceEvents: [], places: [], camera: null, timer: null, loading: 0, pages: { orders: 0, tickets: 0, users: 0, support: 0 } };
+const titles = { overview: 'نمای کلی', events: 'رویدادها', places: 'مکان‌ها', orders: 'بررسی پرداخت‌ها', support: 'تیکت‌های پشتیبانی', tickets: 'بلیت‌ها', checkin: 'ثبت ورود', users: 'شرکت‌کنندگان', broadcast: 'پیام‌رسانی', admins: 'مدیران', settings: 'داده‌ها و پشتیبان' };
+const supportStatuses = { new: 'جدید', in_review: 'در حال بررسی', waiting_user: 'منتظر پاسخ کاربر', closed: 'بسته' };
 const statusNames = { pending: 'در انتظار بررسی', pending_payment: 'در انتظار پرداخت', reserved: 'رزروشده', confirmed: 'تأییدشده', completed: 'تکمیل‌شده', paid: 'پرداخت‌شده', approved: 'تأییدشده', rejected: 'ردشده', cancelled: 'لغوشده', expired: 'منقضی‌شده', attended: 'واردشده', issued: 'صادرشده', valid: 'معتبر', active: 'فعال' };
 const roleNames = { owner: 'مالک', admin: 'مدیر', checkin: 'مسئول پذیرش' };
 const faNumber = new Intl.NumberFormat('fa-IR');
@@ -488,6 +489,64 @@ async function showOrders() {
   }));
   pager($('orders-list'), 'orders', data.length);
 }
+async function showSupport() {
+  const status = $('support-filter').value, page = state.pages.support;
+  const data = await api(query('/api/support', { status, limit: 50, offset: page * 50 }));
+  if (state.view !== 'support' || status !== $('support-filter').value || page !== state.pages.support) return;
+  table($('support-list'), ['تیکت', 'شرکت‌کننده', 'رویداد', 'وضعیت', 'مسئول رسیدگی', 'آخرین فعالیت', 'گفتگو'], data.map(item => [
+    '#' + item.id, person(item), item.event_name, supportStatuses[item.status],
+    item.assigned_to ?? '—', date(item.updated_at), button('باز کردن', () => openSupport(item.id)),
+  ]));
+  pager($('support-list'), 'support', data.length);
+}
+async function openSupport(id) {
+  const dialog = $('support-dialog');
+  const form = $('support-reply');
+  form.reset();
+  form.dataset.requestKey = crypto.randomUUID();
+  dialog.dataset.ticketId = String(id);
+  await showSupportThread(id);
+  dialog.showModal();
+}
+async function showSupportThread(id, offset = 0) {
+  const path = '/api/support/' + id;
+  const { ticket, messages, has_more: hasMore } = await api(query(path, { limit: 25, offset }));
+  const dialog = $('support-dialog');
+  if (dialog.dataset.ticketId !== String(id)) return;
+  $('support-title').textContent = `تیکت #${id} · ${supportStatuses[ticket.status]}`;
+  $('support-summary').replaceChildren(
+    el('p', `${ticket.event_name} · ${person(ticket)}`),
+    el('p', `سفارش ${ticket.order_id} · ${statusNames[ticket.order_status] || ticket.order_status} · ${number(ticket.quantity * ticket.unit_price)} تومان`, 'muted support-order'),
+  );
+  const actions = $('support-actions');
+  actions.replaceChildren();
+  const mine = String(ticket.assigned_to) === String(state.me.user_id);
+  const open = ticket.status !== 'closed';
+  const apply = async operation => {
+    await api(path + '/' + operation, { method: 'POST' });
+    await Promise.all([showSupportThread(id), showSupport()]);
+  };
+  if (open && ticket.assigned_to == null) actions.append(button('رسیدگی با من', () => apply('claim')));
+  if (open && ticket.assigned_to != null && (mine || state.me.role === 'owner')) actions.append(button('آزاد کردن مسئولیت', () => apply('release')));
+  if (open && mine) actions.append(button('بستن تیکت', () => apply('close')));
+  $('support-reply').hidden = !open || !mine;
+
+  const list = $('support-thread');
+  list.replaceChildren(...messages.slice().reverse().map(message => {
+    const card = el('article', null, 'support-message');
+    card.append(el('strong', message.sender === 'admin' ? 'پشتیبانی' : 'شرکت‌کننده'), el('small', date(message.created_at), 'muted'));
+    if (message.text) card.append(el('p', message.text, 'question-text'));
+    if (message.has_file) card.append(link('مشاهده پیوست رسید', path + '/attachments/' + message.id, 'button secondary small', true));
+    return card;
+  }));
+  if (!messages.length) empty(list, 'پیامی در این صفحه نیست');
+  if (offset || hasMore) {
+    const controls = el('div', null, 'actions');
+    if (hasMore) controls.append(button('پیام‌های قدیمی‌تر', () => showSupportThread(id, offset + 25)));
+    if (offset) controls.append(button('پیام‌های تازه‌تر', () => showSupportThread(id, Math.max(0, offset - 25))));
+    list.append(controls);
+  }
+}
 async function showTickets() {
   const eventId = $('tickets-event').value;
   $('export-tickets').href = query('/api/export/tickets', { eventId });
@@ -518,12 +577,13 @@ async function load() {
   const id = ++state.loading;
   $('loading').hidden = false; $('page-error').hidden = true;
   try {
-    if (state.me.role !== 'checkin' && !['checkin', 'settings'].includes(state.view)) await catalogs();
+    if (state.me.role !== 'checkin' && !['checkin', 'settings', 'support'].includes(state.view)) await catalogs();
     switch (state.view) {
       case 'overview': await showOverview(); break;
       case 'events': showEvents(); break;
       case 'places': showPlaces(); break;
       case 'orders': await showOrders(); break;
+      case 'support': await showSupport(); break;
       case 'tickets': await showTickets(); break;
       case 'users': await showUsers(); break;
       case 'admins': await showAdmins(); break;
@@ -544,7 +604,7 @@ async function navigate(view) {
 }
 function showLogin(message) {
   stopCamera();
-  for (const id of ['jalali-dialog', 'time-dialog', 'questions-dialog']) if ($(id).open) $(id).close();
+  for (const id of ['jalali-dialog', 'time-dialog', 'questions-dialog', 'support-dialog']) if ($(id).open) $(id).close();
   $('app').hidden = true; $('login').hidden = false; $('login-message').textContent = message;
 }
 async function session() {
@@ -743,6 +803,21 @@ $('place-form').addEventListener('submit', (event) => {
 });
 $('reset-place').addEventListener('click', () => { $('place-form').reset(); $('place-form').elements.namedItem('id').value = ''; $('place-form-title').textContent = 'افزودن مکان'; });
 ['order-status', 'orders-event', 'tickets-event'].forEach((id) => $(id).addEventListener('change', () => { state.pages[id === 'tickets-event' ? 'tickets' : 'orders'] = 0; load(); }));
+$('support-filter').addEventListener('change', () => { state.pages.support = 0; load(); });
+$('support-reply').addEventListener('submit', event => {
+  event.preventDefault();
+  const form = event.currentTarget, data = new FormData(form);
+  const id = Number($('support-dialog').dataset.ticketId);
+  action(event.submitter, async () => {
+    await api('/api/support/' + id + '/reply', { method: 'POST', body: {
+      text: data.get('text'), waitForUser: data.has('wait'), requestKey: form.dataset.requestKey,
+    } });
+    form.reset();
+    form.dataset.requestKey = crypto.randomUUID();
+    await Promise.all([showSupportThread(id), showSupport()]);
+    toast('پاسخ در صف ارسال به ربات قرار گرفت');
+  });
+});
 $('users-search').addEventListener('input', () => {
   clearTimeout(userSearchTimer); state.pages.users = 0;
   userSearchTimer = setTimeout(() => { if (state.view === 'users') load(); }, 300);

@@ -36,7 +36,12 @@ QUESTION_FIELDS = {
     "event_question_settings": "event_id enabled closes_at max_questions",
     "event_questions": "id event_id user_id request_key question topic selected created_at",
 }
-FIELDS = {**HISTORICAL_FIELDS, **QUESTION_FIELDS}
+BEFORE_SUPPORT_FIELDS = {**HISTORICAL_FIELDS, **QUESTION_FIELDS}
+SUPPORT_FIELDS = {
+    "support_tickets": "id order_id status assigned_to created_at updated_at",
+    "support_messages": "id ticket_id sender actor_id request_key text file_id created_at",
+}
+FIELDS = {**BEFORE_SUPPORT_FIELDS, **SUPPORT_FIELDS}
 OLD_TICKET_FIELDS = set(BASE_FIELDS["tickets"].split()) - {"checkin_code"}
 OLD_EVENT_FIELDS = set(BASE_FIELDS["events"].split()) - {"pricing_mode", "fum_student_price", "poster_url"}
 PRE_POSTER_EVENT_FIELDS = set(BASE_FIELDS["events"].split()) - {"poster_url"}
@@ -56,7 +61,7 @@ def validate_snapshot(snapshot, include_admins=False):
     if set(snapshot) - {"format", "version", "created_at", "tables"}:
         raise ValueError("Unknown top level snapshot fields")
     tables = snapshot.get("tables")
-    if not isinstance(tables, dict) or set(tables) not in (set(BASE_FIELDS), set(HISTORICAL_FIELDS), set(FIELDS)):
+    if not isinstance(tables, dict) or set(tables) not in (set(BASE_FIELDS), set(HISTORICAL_FIELDS), set(BEFORE_SUPPORT_FIELDS), set(FIELDS)):
         raise ValueError("Snapshot must contain exactly a supported set of backup tables")
     sql = legacy.empty_guard()
     checkin_codes = set()

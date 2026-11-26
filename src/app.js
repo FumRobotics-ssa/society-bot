@@ -69,9 +69,9 @@ async function allPages(loader) {
   }
   fail('خروجی بزرگ است لطفا از بکاپ کامل دیتابیس استفاده کنید', 413);
 }
-async function receipt(env, order) {
-  if (!order?.receipt_file_id) fail('رسید پیدا نشد', 404);
-  const response = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/getFile`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file_id: order.receipt_file_id }), signal: AbortSignal.timeout(10000) });
+async function receipt(env, fileId) {
+  if (!fileId) fail('رسید پیدا نشد', 404);
+  const response = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/getFile`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file_id: fileId }), signal: AbortSignal.timeout(10000) });
   const file = await response.json();
   const path = file.result?.file_path;
   if (!file.ok || !path || path.includes('..') || !/^[A-Za-z0-9_./-]+$/.test(path)) fail('دریافت رسید از تلگرام ناموفق بود', 502);
@@ -201,7 +201,32 @@ async function api(request, env, store, url) {
     return json(order);
   }
   const file = path.match(/^\/api\/orders\/([a-zA-Z0-9-]+)\/receipt$/);
-  if (file && method === 'GET') return receipt(env, await store.getOrder(file[1]));
+  if (file && method === 'GET') return receipt(env, (await store.getOrder(file[1]))?.receipt_file_id);
+  if (path === '/api/support' && method === 'GET') {
+    return json(await store.listSupportTickets({ ...pagination(url), status: url.searchParams.get('status') || '' }));
+  }
+  const support = path.match(/^\/api\/support\/(\d+)(?:\/(claim|release|close|reply|attachments\/(\d+)))?$/);
+  if (support) {
+    const [, id, action, messageId] = support;
+    if (method === 'GET' && messageId) return receipt(env, (await store.getSupportAttachment(id, messageId))?.file_id);
+    if (method === 'GET' && !action) {
+      const ticket = await store.getSupportTicket(id);
+      if (!ticket) fail('تیکت پیدا نشد', 404);
+      const { limit, offset } = pagination(url);
+      const messages = await store.listSupportMessages(id, { limit: limit + 1, offset });
+      return json({ ticket, messages: messages.slice(0, limit), has_more: messages.length > limit });
+    }
+    if (method === 'POST' && action === 'reply') {
+      const data = await body(request, 8192);
+      if (typeof data?.waitForUser !== 'boolean') fail('وضعیت پاسخ معتبر نیست');
+      await store.replyToSupportTicket(id, session.user_id, data);
+      return json({ ok: true }, 202);
+    }
+    if (method === 'POST' && ['claim', 'release', 'close'].includes(action)) {
+      await store.changeSupportTicket(id, session.user_id, action, session.role === 'owner');
+      return json({ ok: true });
+    }
+  }
   if (path === '/api/tickets' && method === 'GET') return json(await store.listTickets({ ...pagination(url), eventId: url.searchParams.get('eventId') || undefined }));
   if (path === '/api/users' && method === 'GET') return json(await store.listUsers({ ...pagination(url), search: url.searchParams.get('search') || '', audienceKey: url.searchParams.get('audienceKey') || '' }));
   if (path === '/api/export/users' && method === 'GET') return download(csv(await allPages(opts => store.listUsers(opts))), 'users.csv', 'text/csv;charset=utf-8');
@@ -230,7 +255,7 @@ async function api(request, env, store, url) {
   if (path === '/api/expire' && method === 'POST') { await store.expireOrders(); return json({ ok: true }); }
   if (path === '/api/backup' && method === 'GET') {
     await store.audit(session.user_id, 'backup.export', 'database', {});
-    return download(await exportBackup(env, { includeEventQuestions: true }), `robotics-society-${new Date().toISOString().slice(0, 10)}.json`, 'application/json');
+    return download(await exportBackup(env, { includeEventQuestions: true, includeSupport: true }), `robotics-society-${new Date().toISOString().slice(0, 10)}.json`, 'application/json');
   }
   if (path.startsWith('/api/admins')) {
     if (session.role !== 'owner') fail('فقط مالک میتواند دسترسی مدیران را تغییر دهد', 403);

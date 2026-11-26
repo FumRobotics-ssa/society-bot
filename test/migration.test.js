@@ -111,7 +111,7 @@ test('JSON backup restore preserves ticket token and excludes sessions and admin
   assert.match(legacyTarget.native.prepare('SELECT checkin_code FROM tickets').get().checkin_code, /^[1-9][0-9]{7}$/);
   db.close(); target.close(); oldTarget.close(); legacyTarget.close(); rmSync(dir, { recursive: true });
 });
-test('questions are recoverable from private backups and excluded from Telegram backup documents', async t => {
+test('questions and payment support are recoverable from private backups and excluded from Telegram backups', async t => {
   const db = createDatabase(); db.exec(schema);
   const restored = createDatabase(); restored.exec(schema);
   t.after(() => { db.close(); restored.close(); });
@@ -125,6 +125,10 @@ test('questions are recoverable from private backups and excluded from Telegram 
   await store.submitEventQuestion(event.id, 1, 'متن محرمانهٔ پرسش', 'question-key');
   const [question] = await store.listEventQuestions(event.id);
   await store.selectEventQuestion(event.id, question.id, { selected: true, topic: 'صنعت' });
+  const paid = await store.saveEvent({ name: 'کارگاه', capacity: 2, is_paid: true, price: 50000 });
+  const { order } = await store.reserve(1, paid.id, 1, 'booking-for-support');
+  await db.prepare("UPDATE orders SET status='expired' WHERE id=?").bind(order.id).run();
+  const supportId = await store.submitSupportMessage(order.id, 1, { text: 'پیگیری محرمانهٔ رسید', requestKey: 'support-fixture' });
 
   let privateBackup;
   t.mock.method(globalThis, 'fetch', async (_url, options) => {
@@ -139,6 +143,8 @@ test('questions are recoverable from private backups and excluded from Telegram 
   const telegramBackup = JSON.parse(JSON.parse(telegram.payload)._documentText);
   assert.equal('event_questions' in telegramBackup.tables, false);
   assert.equal('event_question_settings' in telegramBackup.tables, false);
+  assert.equal('support_tickets' in telegramBackup.tables, false);
+  assert.equal('support_messages' in telegramBackup.tables, false);
 
   const source = join(directory, 'backup.json'), output = join(directory, 'restore.sql');
   const preLimitBackup = JSON.parse(privateBackup);
@@ -153,6 +159,8 @@ test('questions are recoverable from private backups and excluded from Telegram 
   assert.equal((await restoredStore.getEventQuestionSettings(event.id)).max_questions, 3);
   assert.deepEqual((await restoredStore.selectedEventQuestions(event.id)).map(row => ({ ...row })),
     [{ question: 'متن محرمانهٔ پرسش', topic: 'صنعت' }]);
+  assert.equal((await restoredStore.getSupportTicket(supportId)).order_id, order.id);
+  assert.equal((await restoredStore.listSupportMessages(supportId))[0].text, 'پیگیری محرمانهٔ رسید');
 });
 
 test('daily backup filename has only project name and date', async () => {

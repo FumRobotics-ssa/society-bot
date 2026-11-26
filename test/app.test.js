@@ -4,6 +4,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { createDatabase } from '../src/sqlite.js';
 import { Store } from '../src/store.js';
 import { handleRequest } from '../src/app.js';
+import { handleUpdate } from '../src/bot.js';
 import { createLoginCode, exchangeLogin, digest, SESSION_COOKIE } from '../src/auth.js';
 import { receiveUpdate, processOutbox, processInbox } from '../src/jobs.js';
 
@@ -205,6 +206,103 @@ test('only panel admins can manage and download selected event questions', async
   assert.doesNotMatch(await updatedExport.text(), /نقش دانشجویان|پرسش دیگر/);
   assert.deepEqual(await store.one('SELECT COUNT(*) AS count FROM outbox'), messagesBeforeReview);
 });
+test('payment support connects the bot thread to an admin-only inbox, with one owner and reply', async t => {
+  const { db, env, store, request } = fixture();
+  t.after(() => db.close());
+  await store.upsertUser({ id: 1, phone: '09123456789' });
+  await store.setAdmin(7, 'checkin');
+  await store.setAdmin(8, 'admin');
+  const event = await store.saveEvent({ name: 'کارگاه', capacity: 2, is_paid: true, price: 50000 });
+  const { order } = await store.reserve(1, event.id, 1, 'paid-for-support');
+  await db.prepare('UPDATE orders SET expires_at=unixepoch()-1 WHERE id=?').bind(order.id).run();
+  await store.expireOrders();
+  const notice = JSON.parse((await store.one("SELECT payload FROM outbox WHERE method='sendMessage'")).payload);
+  const orderButton = notice.reply_markup.inline_keyboard[0][0];
+  assert.equal(orderButton.callback_data, `sp:o:${order.id}`);
+
+  let seq = 0;
+  const click = (data, id = 1) => handleUpdate({
+    update_id: ++seq, callback_query: { id: String(seq), data, from: { id }, message: { chat: { id, type: 'private' } } },
+  }, env, store);
+  const say = (id, message, updateId = ++seq) => handleUpdate({
+    update_id: updateId, message: { from: { id }, chat: { id, type: 'private' }, ...message },
+  }, env, store);
+  await click(orderButton.callback_data, 2);
+  assert.equal(await store.getState(2), null);
+  await click(orderButton.callback_data);
+  const submitted = ++seq;
+  const receipt = { caption: 'رسید بعد از مهلت', document: { file_id: 'private-receipt-id', mime_type: 'application/pdf', file_size: 512 } };
+  await say(1, receipt, submitted);
+  await say(1, receipt, submitted);
+  const [ticket] = await store.listSupportTickets();
+  assert.equal(ticket.order_id, order.id);
+  assert.equal(ticket.status, 'new');
+  const [first] = await store.listSupportMessages(ticket.id);
+  assert.equal(first.text, receipt.caption);
+  assert.equal(first.has_file, 1);
+  assert.equal((await store.listSupportMessages(ticket.id)).length, 1);
+  await click(`sp:r:${ticket.id}`, 2);
+  assert.equal(await store.getState(2), null);
+
+  const support = '/api/support';
+  const path = support + '/' + ticket.id;
+  const filePath = path + '/attachments/' + first.id;
+  assert.equal((await request(filePath)).status, 401);
+  const checkin = { Cookie: await cookie(db, 7) };
+  assert.equal((await request(support, { headers: checkin })).status, 403);
+  assert.equal((await request(filePath, { headers: checkin })).status, 403);
+  const admins = await Promise.all([8, 99].map(async id => ({ Cookie: await cookie(db, id), Origin: env.PUBLIC_URL })));
+  const post = (suffix, headers, body) => request(path + '/' + suffix, { method: 'POST', headers, body: JSON.stringify(body) });
+  const claims = await Promise.all(admins.map(headers => post('claim', headers)));
+  assert.deepEqual(claims.map(reply => reply.status).sort(), [200, 409]);
+  const winner = claims.findIndex(reply => reply.status === 200);
+  const reply = { requestKey: crypto.randomUUID(), text: 'شماره پیگیری واریز را بفرستید.', waitForUser: true };
+  db.exec("CREATE TRIGGER fixture_outbox_failure BEFORE INSERT ON outbox WHEN NEW.dedupe_key LIKE 'support-reply:%' BEGIN SELECT RAISE(ABORT,'fixture_outbox_failure'); END;");
+  await assert.rejects(store.replyToSupportTicket(ticket.id, [8, 99][winner], reply), /fixture_outbox_failure/);
+  assert.equal((await store.listSupportMessages(ticket.id)).length, 1);
+  db.exec('DROP TRIGGER fixture_outbox_failure');
+  assert.equal((await post('reply', admins[1 - winner], reply)).status, 409);
+  assert.equal((await post('reply', admins[winner], reply)).status, 202);
+  assert.equal((await post('reply', admins[winner], reply)).status, 202);
+  const thread = await (await request(path, { headers: admins[0] })).json();
+  assert.equal(thread.ticket.status, 'waiting_user');
+  assert.equal(thread.messages.length, 2);
+  assert.doesNotMatch(JSON.stringify(thread), /private-receipt-id/);
+
+  const sent = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    if (url.endsWith('/getFile')) {
+      assert.equal(JSON.parse(options.body).file_id, 'private-receipt-id');
+      return Response.json({ ok: true, result: { file_path: 'documents/receipt.pdf', file_size: 4 } });
+    }
+    if (url.endsWith('/documents/receipt.pdf')) return new Response('%PDF', { headers: { 'Content-Type': 'application/pdf' } });
+    if (url.endsWith('/sendMessage')) sent.push(JSON.parse(options.body));
+    return Response.json({ ok: true });
+  });
+  const downloaded = await request(filePath, { headers: admins[0] });
+  assert.equal(downloaded.status, 200);
+  assert.equal(downloaded.headers.get('Cache-Control'), 'no-store');
+  assert.equal(await downloaded.text(), '%PDF');
+  assert.equal((await request(support + '/9999/attachments/' + first.id, { headers: admins[0] })).status, 404);
+  await processOutbox(env, 30);
+  const delivery = sent.filter(payload => payload.text.includes(reply.text));
+  assert.equal(delivery.length, 1);
+  assert.equal(delivery[0].chat_id, 1);
+  assert.equal(delivery[0].reply_markup.inline_keyboard[0][0].callback_data, `sp:v:${ticket.id}:0`);
+
+  await click(`sp:r:${ticket.id}`);
+  await say(1, { text: 'شماره مرجع در پیوست بالا است.' });
+  assert.equal((await store.getSupportTicket(ticket.id)).status, 'in_review');
+  assert.equal((await post('close', admins[winner])).status, 200);
+  assert.equal((await store.getSupportTicket(ticket.id)).status, 'closed');
+  await click(orderButton.callback_data);
+  await click(`sp:r:${ticket.id}`);
+  await say(1, { text: 'هنوز نتیجه را نگرفته‌ام.' });
+  assert.equal((await store.listSupportTickets()).length, 1);
+  assert.equal((await store.getSupportTicket(ticket.id)).status, 'in_review');
+  assert.equal((await store.getOrder(order.id)).status, 'expired');
+});
+
 test('public ticket needs unpredictable token and reveals no name or phone', async () => {
   const { db, store, request } = fixture(); await store.upsertUser({ id: 1, first_name: 'PrivateName', phone: '09123456789' });
   const event = await store.saveEvent({ name: '<script>bad</script>', capacity: 2 });
