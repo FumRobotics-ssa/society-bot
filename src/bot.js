@@ -98,7 +98,7 @@ function eventTime(value) {
   if (Number.isNaN(date.getTime())) return String(value);
   return tehranDate.format(date);
 }
-function eventText(event, { showRemainingCapacity = false, includeDescription = true } = {}) {
+function eventText(event, { forAdmin = false, includeDescription = true } = {}) {
   const prices = event.pricing_mode === 'differentiated'
     ? `🎫 قیمت هر بلیت\nعموم: ${money(event.price)} تومان\nدانشجوی فردوسی: ${money(event.fum_student_price)} تومان`
     : event.is_paid && Number(event.price) > 0 ? `🎫 قیمت هر بلیت: ${money(event.price)} تومان` : '🎫 ثبت‌نام رایگان است.';
@@ -106,14 +106,15 @@ function eventText(event, { showRemainingCapacity = false, includeDescription = 
   const mapUrl = neshanUrl(event.place_map_url);
   const schedule = [
     `🕒 زمان شروع: ${eventTime(event.starts_at)}`,
+    event.ends_at ? `زمان پایان: ${eventTime(event.ends_at)}` : '',
     `📍 مکان: ${event.place_name || 'اعلام نشده'}`,
     address ? `نشانی: ${address}` : '',
     mapUrl ? `موقعیت در نشان: ${mapUrl}` : '',
   ].filter(Boolean).join('\n');
   const registration = [
-    `شناسه: ${event.id}`,
+    forAdmin ? `شناسه: ${event.id}` : '',
     `ظرفیت: ${event.capacity}`,
-    showRemainingCapacity && event.remaining != null ? `ظرفیت باقی‌مانده: ${event.remaining}` : '',
+    forAdmin && event.remaining != null ? `ظرفیت باقی‌مانده: ${event.remaining}` : '',
     `سقف بلیت برای هر نفر: ${event.max_per_user}`,
     `وضعیت ثبت‌نام: ${event.active ? 'فعال' : 'غیرفعال'}`,
   ].filter(Boolean).join('\n');
@@ -676,7 +677,7 @@ export async function handleUpdate(update, env, store) {
     }
     if (command === 'get_event') {
       const event = await store.getEvent(positive(arg));
-      return send(event ? eventText(event, { showRemainingCapacity: true }) : 'رویداد پیدا نشد.');
+      return send(event ? eventText(event, { forAdmin: true }) : 'رویداد پیدا نشد.');
     }
     if (command === 'add_event') {
       const parts = arg.split(/\r?\n\s*-\s*\r?\n/).map(x => x.trim());
@@ -688,7 +689,7 @@ export async function handleUpdate(update, env, store) {
       if (!place) return send('مکان پیدا نشد. شناسهٔ مکان را بررسی کنید.');
       const event = await store.saveEvent({ name: name(parts[0]), description: parts[1], is_paid: paid, max_per_user: positive(parts[3]), place_id: placeId, capacity: place.capacity, price: paid ? positive(parts[5]) : 0, payment_instructions: parts[6] || '', starts_at: parts[7] || '', active: 1 });
       await store.audit(from.id, 'create_event', String(event.id), {});
-      return send(paragraphs('✅ رویداد ثبت شد.', eventText(event, { showRemainingCapacity: true }), `برای گرفتن لینک ثبت‌نام، /event_link ${event.id} را بفرستید.`));
+      return send(paragraphs('✅ رویداد ثبت شد.', eventText(event, { forAdmin: true }), `برای گرفتن لینک ثبت‌نام، /event_link ${event.id} را بفرستید.`));
     }
     if (command === 'activate_event' || command === 'deactivate_event') {
       const event = await store.getEvent(positive(arg));

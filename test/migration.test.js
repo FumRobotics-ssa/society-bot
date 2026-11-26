@@ -73,7 +73,9 @@ test('JSON backup restore preserves ticket token and excludes sessions and admin
   const dir = mkdtempSync(join(tmpdir(), 'robotics-restore-')); const source = join(dir, 'backup.json'), output = join(dir, 'restore.sql');
   const db = createDatabase(); db.exec(schema); const store = new Store(db);
   await store.upsertUser({ id: 1, phone: '09123456789' }); await store.setAdmin(1, 'admin');
-  const event = await store.saveEvent({ name: 'رویداد', capacity: 2 }); const order = await store.reserve(1, event.id, 1, 'x');
+  const endsAt = '2026-12-03T16:00:00+03:30';
+  const event = await store.saveEvent({ name: 'رویداد', capacity: 2, starts_at: '2026-12-03T14:00:00+03:30', ends_at: endsAt });
+  const order = await store.reserve(1, event.id, 1, 'x');
   const snapshot = await exportBackup({ DB: db });
   assert.equal(JSON.parse(snapshot).format, 'robotics-society-json');
   writeFileSync(source, snapshot);
@@ -81,11 +83,13 @@ test('JSON backup restore preserves ticket token and excludes sessions and admin
   assert.equal(result.status, 0, result.stderr);
   const target = createDatabase(); target.exec(schema); target.exec(readFileSync(output, 'utf8'));
   assert.equal(target.native.prepare('SELECT token FROM tickets').get().token, order.tickets[0].token);
+  assert.equal(target.native.prepare('SELECT ends_at FROM events').get().ends_at, endsAt);
   assert.match(target.native.prepare('SELECT checkin_code FROM tickets').get().checkin_code, /^[1-9][0-9]{7}$/);
   assert.equal(target.native.prepare('SELECT COUNT(*) AS n FROM admins').get().n, 0);
   const oldSnapshot = JSON.parse(snapshot);
   delete oldSnapshot.tables.events[0].pricing_mode;
   delete oldSnapshot.tables.events[0].fum_student_price;
+  delete oldSnapshot.tables.events[0].ends_at;
   delete oldSnapshot.tables.orders[0].pricing_group;
   const oldSource = join(dir, 'pre-pricing-backup.json'), oldOutput = join(dir, 'pre-pricing-restore.sql');
   writeFileSync(oldSource, JSON.stringify(oldSnapshot));
@@ -93,6 +97,7 @@ test('JSON backup restore preserves ticket token and excludes sessions and admin
   assert.equal(oldRestore.status, 0, oldRestore.stderr);
   const oldTarget = createDatabase(); oldTarget.exec(schema); oldTarget.exec(readFileSync(oldOutput, 'utf8'));
   assert.equal(oldTarget.native.prepare('SELECT pricing_mode FROM events').get().pricing_mode, 'fixed');
+  assert.equal(oldTarget.native.prepare('SELECT ends_at FROM events').get().ends_at, '');
   assert.equal(oldTarget.native.prepare('SELECT pricing_group FROM orders').get().pricing_group, 'fixed');
   const legacySource = join(dir, 'legacy.json'), legacyOutput = join(dir, 'legacy.sql');
   const legacySnapshot = JSON.parse(snapshot);

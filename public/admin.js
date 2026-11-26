@@ -109,7 +109,8 @@ function shiftJalaliMonth(amount, focusDay = calendar.day) {
 }
 function openJalaliCalendar(input) {
   dateInput = input;
-  const selected = selectedJalaliDate(input) || tehranDateTime();
+  const startDate = input.id === 'event-end-date' ? selectedJalaliDate($('event-jalali-date')) : null;
+  const selected = selectedJalaliDate(input) || startDate || tehranDateTime();
   calendar.year = selected.year; calendar.month = selected.month; calendar.day = selected.day;
   renderJalaliCalendar();
   $('jalali-dialog').showModal();
@@ -117,9 +118,9 @@ function openJalaliCalendar(input) {
 }
 function openTimePicker(input) {
   timeInput = input;
-  const forEventStart = input.id === 'event-start-time';
-  $('time-dialog-title').textContent = forEventStart ? 'انتخاب ساعت شروع' : 'انتخاب ساعت';
-  $('time-hour').setAttribute('aria-label', forEventStart ? 'ساعت شروع' : 'ساعت');
+  const label = input.dataset.pickerLabel || 'ساعت';
+  $('time-dialog-title').textContent = `انتخاب ${label}`;
+  $('time-hour').setAttribute('aria-label', label);
   const parsed = /^(\d{2}):(\d{2})$/.exec(latinNumber(input.value || input.placeholder).trim());
   const current = tehranDateTime();
   const selectedHour = parsed ? Number(parsed[1]) : current.hour;
@@ -317,7 +318,12 @@ function eventCard(event, editable) {
   card.append(el('h3', event.name), el('p', event.description || 'توضیحی برای این رویداد ثبت نشده', 'description'));
   const meta = el('div', null, 'event-meta');
   const place = state.places.find((place) => String(place.id) === String(event.place_id));
-  [['زمان شروع', date(event.starts_at)], ['مکان', place?.name || event.place_name || 'تعیین نشده'], ['سقف هر نفر', number(event.max_per_user) + ' بلیت']].forEach(([label, value]) => { const cell = el('div', label); cell.append(el('strong', value)); meta.append(cell); });
+  const fields = [['زمان شروع', date(event.starts_at)]];
+  if (event.ends_at) fields.push(['زمان پایان', date(event.ends_at)]);
+  fields.push(['مکان', place?.name || event.place_name || 'تعیین نشده'], ['سقف هر نفر', number(event.max_per_user) + ' بلیت']);
+  for (const [label, value] of fields) {
+    const cell = el('div', label); cell.append(el('strong', value)); meta.append(cell);
+  }
   card.append(meta, eventRegistrationStats(event));
   const actions = el('div', null, 'actions');
   if (editable) {
@@ -408,6 +414,11 @@ function readQuestionFields() {
 function toggleQuestionFields() {
   $('questions-options').hidden = !$('questions-enabled').checked;
 }
+function fillDateTime(dateId, timeId, value) {
+  const local = value ? tehranDateTime(value) : null;
+  $(dateId).value = local ? formatJalaliDate(local) : '';
+  $(timeId).value = local ? persianNumber(`${String(local.hour).padStart(2, '0')}:${String(local.minute).padStart(2, '0')}`) : '';
+}
 function editEvent(event = null) {
   const form = $('event-form'); form.reset();
   form.elements.namedItem('id').value = event?.id || '';
@@ -432,14 +443,11 @@ function editEvent(event = null) {
     $('event-poster-preview').src = '';
   }
   updateEventPricingFields();
-  const when = event?.starts_at ? tehranDateTime(event.starts_at) : null;
-  form.dataset.requiresStart = String(!event || Boolean(when));
-  $('event-jalali-date').value = when ? formatJalaliDate(when) : '';
-  form.elements.namedItem('starts_at_time').value = when ? persianNumber(`${String(when.hour).padStart(2, '0')}:${String(when.minute).padStart(2, '0')}`) : '';
-  const deadline = event?.questions_closes_at ? tehranDateTime(event.questions_closes_at * 1000) : null;
+  form.dataset.requiresStart = String(!event || Boolean(event.starts_at));
+  fillDateTime('event-jalali-date', 'event-start-time', event?.starts_at);
+  fillDateTime('event-end-date', 'event-end-time', event?.ends_at);
+  fillDateTime('questions-date', 'questions-time', event?.questions_closes_at * 1000);
   $('questions-enabled').checked = yes(event?.questions_enabled);
-  $('questions-date').value = deadline ? formatJalaliDate(deadline) : '';
-  $('questions-time').value = deadline ? persianNumber(`${String(deadline.hour).padStart(2, '0')}:${String(deadline.minute).padStart(2, '0')}`) : '';
   $('questions-max').value = event?.questions_max ?? 3;
   toggleQuestionFields();
   form.dataset.questionFields = JSON.stringify(readQuestionFields());
@@ -615,6 +623,9 @@ $('questions-enabled').addEventListener('change', toggleQuestionFields);
 $('questions-filter').addEventListener('change', () => questionFeedback(() => loadEventQuestions($('questions-dialog').dataset.eventId)));
 connectPicker('event-jalali-date', 'jalali-open', openJalaliCalendar);
 connectPicker('event-start-time', 'time-open', openTimePicker);
+connectPicker('event-end-date', 'end-date-open', openJalaliCalendar);
+connectPicker('event-end-time', 'end-time-open', openTimePicker);
+$('event-end-clear').addEventListener('click', () => fillDateTime('event-end-date', 'event-end-time'));
 connectPicker('questions-date', 'questions-date-open', openJalaliCalendar);
 connectPicker('questions-time', 'questions-time-open', openTimePicker);
 $('time-confirm').addEventListener('click', chooseTime);
@@ -653,13 +664,18 @@ $('event-form').addEventListener('submit', (event) => {
     const startsAt = form.dataset.requiresStart === 'true' || startDay || startTime
       ? jalaliTimeToIso(parseJalaliDate(startDay), startTime)
       : '';
+    const endDay = values.get('ends_at_jalali');
+    const endTime = values.get('ends_at_time');
+    if (endDay && !endTime) throw new Error('ساعت پایان را انتخاب کنید');
+    if (endTime && !startsAt) throw new Error('برای ثبت زمان پایان، زمان شروع را هم مشخص کنید');
+    const endsAt = endTime ? jalaliTimeToIso(parseJalaliDate(endDay || startDay), endTime) : '';
     const pricingMode = values.get('pricing_mode') || 'fixed';
     const fixedPaid = values.has('is_paid');
     const publicPrice = pricingMode === 'differentiated' ? Number(values.get('public_price')) : fixedPaid ? Number(values.get('price')) : 0;
     const studentPrice = pricingMode === 'differentiated' ? Number(values.get('fum_student_price')) : 0;
     const isPaid = pricingMode === 'differentiated' ? publicPrice > 0 || studentPrice > 0 : fixedPaid;
     const posterUrl = values.get('poster_url') || '';
-    const body = { name: values.get('name').trim(), description: values.get('description').trim(), place_id: values.get('place_id') ? Number(values.get('place_id')) : null, capacity: Number(values.get('capacity')), max_per_user: Number(values.get('max_per_user')), price: publicPrice, fum_student_price: studentPrice, pricing_mode: pricingMode, poster_url: posterUrl, payment_instructions: values.get('payment_instructions').trim(), starts_at: startsAt, is_paid: isPaid, active: values.has('active') };
+    const body = { name: values.get('name').trim(), description: values.get('description').trim(), place_id: values.get('place_id') ? Number(values.get('place_id')) : null, capacity: Number(values.get('capacity')), max_per_user: Number(values.get('max_per_user')), price: publicPrice, fum_student_price: studentPrice, pricing_mode: pricingMode, poster_url: posterUrl, payment_instructions: values.get('payment_instructions').trim(), starts_at: startsAt, ends_at: endsAt, is_paid: isPaid, active: values.has('active') };
     const questionFields = readQuestionFields();
     if (JSON.stringify(questionFields) !== form.dataset.questionFields) {
       const { enabled, day, time, maxQuestions } = questionFields;

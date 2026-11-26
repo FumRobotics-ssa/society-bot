@@ -125,6 +125,34 @@ test('event creation and editing save question settings with the event', async t
     id: event.id, name: updated.name, enabled: 0, closes_at: closesAt, max_questions: 1,
   });
 });
+test('the panel saves an optional event end, validates its order, and lets admins clear it', async t => {
+  const { db, request } = fixture();
+  t.after(() => db.close());
+  const headers = { Cookie: await cookie(db, 99), Origin: 'https://example.test' };
+  const write = (path, body, method = 'POST') => request(path, { method, headers, body: JSON.stringify(body) });
+  const events = '/api/events';
+  const start = '2026-12-03T23:30:00+03:30';
+  const end = '2026-12-04T01:15:00+03:30';
+  const input = { name: 'نشست شبانه', capacity: 10, starts_at: start };
+
+  const noStart = await write(events, { ...input, starts_at: '', ends_at: end });
+  assert.equal(noStart.status, 409);
+  const sameTime = await write(events, { ...input, ends_at: start });
+  assert.equal(sameTime.status, 409);
+  const created = await write(events, { ...input, ends_at: end });
+  assert.equal(created.status, 201);
+  const { id } = await created.json();
+  const path = events + '/' + id;
+
+  const readEvent = async () => (await (await request(events, { headers })).json()).find(item => item.id === id);
+  assert.equal((await readEvent()).ends_at, end);
+  assert.equal((await write(path, { ends_at: 'invalid' }, 'PATCH')).status, 409);
+  assert.equal((await write(path, { starts_at: end }, 'PATCH')).status, 409);
+  assert.equal((await write(path, { active: false }, 'PATCH')).status, 200);
+  assert.equal((await readEvent()).ends_at, end);
+  assert.equal((await write(path, { ends_at: '' }, 'PATCH')).status, 200);
+  assert.equal((await readEvent()).ends_at, '');
+});
 test('only panel admins can manage and download selected event questions', async t => {
   const { db, store, request } = fixture();
   t.after(() => db.close());

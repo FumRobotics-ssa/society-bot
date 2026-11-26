@@ -85,11 +85,11 @@ test('a public event link resumes an existing signup and then opens the same eve
   assert.equal((await f.store.listOrders())[0].event_id, other.id);
 });
 
-test('remaining event capacity is visible in admin details and hidden in registration messages', async t => {
+test('event details show the optional end time and reserve the id and remaining capacity for admins', async t => {
   const f = setup();
   t.after(() => f.db.close());
   await f.store.upsertUser({ id: 1, phone: '09123456789' });
-  const event = await f.store.saveEvent({ name: 'رویداد متنی', capacity: 7 });
+  const event = await f.store.saveEvent({ name: 'رویداد متنی', capacity: 7, starts_at: '2026-12-03T14:00:00+03:30', ends_at: '2026-12-03T16:00:00+03:30' });
   const withPoster = await f.store.saveEvent({ name: 'رویداد با پوستر', capacity: 7, poster_url: 'https://example.test/event.jpg' });
   await f.store.reserve(1, event.id, 1, 'existing-order');
 
@@ -102,12 +102,17 @@ test('remaining event capacity is visible in admin details and hidden in registr
     .map(row => JSON.parse(row.payload));
   const participantReplies = replies.filter(reply => reply.chat_id === 1);
   assert.equal(participantReplies.length, 2);
-  assert.ok(participantReplies.some(reply => reply.text?.includes(event.name)));
-  assert.ok(participantReplies.some(reply => reply.caption?.includes(withPoster.name)));
+  const details = participantReplies.find(reply => reply.text?.includes(event.name)).text;
+  assert.match(details, /زمان شروع:[^\n]*۱۴:۰۰/);
+  assert.match(details, /زمان پایان:[^\n]*۱۶:۰۰/);
+  const caption = participantReplies.find(reply => reply.caption?.includes(withPoster.name)).caption;
+  assert.doesNotMatch(caption, /زمان پایان/);
   for (const reply of participantReplies) {
-    assert.doesNotMatch(reply.text || reply.caption, /ظرفیت باقی‌مانده/);
+    assert.doesNotMatch(reply.text || reply.caption, /ظرفیت باقی‌مانده|شناسه:/);
   }
-  assert.match(replies.find(reply => reply.chat_id === 99).text, /ظرفیت باقی‌مانده: 6/);
+  const adminDetails = replies.find(reply => reply.chat_id === 99).text;
+  assert.match(adminDetails, new RegExp(`شناسه: ${event.id}`));
+  assert.match(adminDetails, /ظرفیت باقی‌مانده: 6/);
 });
 test('registered attendees can submit a private question once per update and resume their prior step', async t => {
   const f = setup();
