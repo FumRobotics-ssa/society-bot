@@ -60,6 +60,8 @@ test('event statistics count distinct registrants, checked-in tickets and live r
   await store.reserve(4, event.id, 1, 'held');
   const expired = await store.reserve(5, event.id, 2, 'expired');
   await db.prepare('UPDATE orders SET expires_at=unixepoch()-1 WHERE id=?').bind(expired.order.id).run();
+  await store.expireOrders();
+  await store.reserve(5, empty.id, 1, 'other-event');
 
   const path = '/api/events?limit=1';
   assert.equal((await request(path)).status, 401);
@@ -70,8 +72,8 @@ test('event statistics count distinct registrants, checked-in tickets and live r
   assert.equal(firstPage.status, 200);
   const [emptyStats] = await firstPage.json();
   assert.equal(emptyStats.id, empty.id);
-  assert.equal(emptyStats.remaining, empty.capacity);
-  assert.equal(emptyStats.registered_users, 0);
+  assert.equal(emptyStats.remaining, empty.capacity - 1);
+  assert.equal(emptyStats.registered_users, 1);
   assert.equal(emptyStats.checked_in_tickets, 0);
 
   const secondPage = await request(path + '&offset=1', { headers });
@@ -84,6 +86,41 @@ test('event statistics count distinct registrants, checked-in tickets and live r
   assert.equal(stats.held_tickets, 3);
   assert.equal(stats.occupied, 8);
   assert.equal(stats.remaining, 4);
+
+  const exportPath = '/api/export/confirmed-participants';
+  const selectedPath = exportPath + '?audienceKey=current%3A' + event.id;
+  assert.equal((await request(selectedPath)).status, 401);
+  assert.equal((await request(selectedPath, { headers: { Cookie: await cookie(db, 7) } })).status, 403);
+  const exported = await request(selectedPath, { headers });
+  assert.match(exported.headers.get('Content-Disposition'), /confirmed-participants.csv/);
+  const selectedRows = (await exported.text()).split('\r\n');
+  assert.equal(selectedRows[0], '"id","first_name","last_name","username","phone"');
+  assert.deepEqual(selectedRows.slice(1).map(row => row.split(',')[0]).sort(), ['"1"', '"2"']);
+  const allRows = (await (await request(exportPath, { headers })).text()).split('\r\n');
+  assert.deepEqual(allRows.slice(1).map(row => row.split(',')[0]).sort(), ['"1"', '"2"', '"5"']);
+});
+test('registration cutoff rejects a stale quote and leaves prior orders payable', async t => {
+  const { db, store, request } = fixture();
+  t.after(() => db.close());
+  const headers = { Cookie: await cookie(db, 99), Origin: 'https://example.test' };
+  const registrationClosesAt = Math.floor(Date.now() / 1000) + 3600;
+  const created = await request('/api/events', { method: 'POST', headers, body: JSON.stringify({
+    name: 'کارگاه', capacity: 4, is_paid: 1, price: 1000, registration_closes_at: registrationClosesAt,
+  }) });
+  assert.equal(created.status, 201);
+  const event = await created.json();
+  assert.equal(event.registration_closes_at, registrationClosesAt);
+  for (const id of [1, 2]) await store.upsertUser({ id, phone: '09123456789' });
+  const { order } = await store.reserve(1, event.id, 1, 'existing-hold');
+  const quote = await store.quoteOrder(2, event.id, 1);
+  await store.saveEvent({ registration_closes_at: 1 }, event.id);
+  assert.equal((await store.listEvents({ activeOnly: true })).length, 0);
+  await assert.rejects(store.reserve(2, event.id, 1, 'stale-quote', quote), { code: 'EVENT_INACTIVE' });
+  assert.equal((await store.submitReceipt(order.id, 1, 'receipt')).status, 'pending');
+  assert.equal((await store.reviewOrder(order.id, true, 99)).status, 'approved');
+  const changed = await request('/api/events/' + event.id, { method: 'PATCH', headers, body: '{"registration_closes_at":null}' });
+  assert.equal(changed.status, 200);
+  assert.equal((await changed.json()).registration_open, 1);
 });
 test('event creation and editing save question settings with the event', async t => {
   const { db, store, request } = fixture();

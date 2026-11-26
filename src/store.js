@@ -8,6 +8,7 @@ const SUPPORT_TICKET = `SELECT s.*, o.user_id, o.status AS order_status, o.quant
   JOIN users u ON u.id=o.user_id`;
 
 const OCCUPIED = "(status='approved' OR (status IN ('reserved','pending') AND expires_at>unixepoch()))";
+const REGISTRATION_OPEN = 'e.archived=0 AND e.active=1 AND (e.registration_closes_at IS NULL OR e.registration_closes_at>unixepoch())';
 const QUESTIONS_OPEN = 'e.archived=0 AND s.enabled=1 AND s.closes_at>unixepoch()';
 const QUESTION_WINDOW = `EXISTS (
   SELECT 1 FROM event_question_settings s WHERE s.event_id=e.id AND ${QUESTIONS_OPEN}
@@ -125,7 +126,7 @@ export class Store {
     ]);
     return { deleted: true };
   }
-  async listUsers({ limit = 100, offset = 0, search = '', audienceKey: selectedAudience = '' } = {}) {
+  async listUsers({ limit = 100, offset = 0, search = '', audienceKey: selectedAudience = '', confirmedOnly = false } = {}) {
     const where = ['u.is_deleted=0'], values = [];
     const term = normalizeDigits(string(search, 'جستجو', 100)).replace(/^@/, '').toLowerCase();
     if (term) {
@@ -146,6 +147,7 @@ export class Store {
         values.push(`%${numeric}%`, `%${numeric}%`, `%${numeric}%`);
       }
     }
+    if (confirmedOnly && selectedAudience === 'no-event') throw domainError('INVALID_INPUT', 'برای خروجی قطعی یک رویداد یا همهٔ رویدادها را انتخاب کنید');
     if (selectedAudience === 'no-event') {
       where.push(`NOT EXISTS (SELECT 1 FROM orders o WHERE o.user_id=u.id AND o.status='approved')
         AND NOT EXISTS (SELECT 1 FROM legacy_event_participants ep WHERE ep.user_id=u.id)`);
@@ -158,6 +160,14 @@ export class Store {
         where.push(`EXISTS (SELECT 1 FROM orders o WHERE o.event_id=? AND o.user_id=u.id AND o.status='approved')`);
       }
       values.push(selected.id);
+    } else if (confirmedOnly) {
+      where.push(`(EXISTS (SELECT 1 FROM orders o WHERE o.user_id=u.id AND o.status='approved')
+        OR EXISTS (SELECT 1 FROM legacy_event_participants ep WHERE ep.user_id=u.id))`);
+    }
+    if (confirmedOnly) {
+      return this.all(`SELECT u.id,u.first_name,u.last_name,u.username,u.phone
+        FROM users u WHERE ${where.join(' AND ')} ORDER BY u.created_at DESC,u.id LIMIT ? OFFSET ?`,
+        ...values, ...paging(limit, offset));
     }
     const eventNames = `(
       SELECT GROUP_CONCAT(label, '، ') FROM (
@@ -229,13 +239,14 @@ export class Store {
   }
   eventSelect() {
     return `SELECT e.*,p.name AS place_name,p.address AS place_address,p.map_url AS place_map_url,
+      (${REGISTRATION_OPEN}) AS registration_open,
       ${QUESTION_WINDOW} AS questions_open,
       COALESCE((SELECT SUM(quantity) FROM orders WHERE event_id=e.id AND ${OCCUPIED}),0) AS occupied,
       e.capacity-COALESCE((SELECT SUM(quantity) FROM orders WHERE event_id=e.id AND ${OCCUPIED}),0) AS remaining
       FROM events e LEFT JOIN places p ON p.id=e.place_id`;
   }
   async listEvents({ activeOnly = false, limit = 100, offset = 0 } = {}) {
-    return this.all(`${this.eventSelect()} WHERE e.archived=0 ${activeOnly ? 'AND e.active=1' : ''} ORDER BY e.id DESC LIMIT ? OFFSET ?`, ...paging(limit, offset));
+    return this.all(`${this.eventSelect()} WHERE ${activeOnly ? REGISTRATION_OPEN : 'e.archived=0'} ORDER BY e.id DESC LIMIT ? OFFSET ?`, ...paging(limit, offset));
   }
   async listEventsWithRegistrationStats({ limit = 100, offset = 0 } = {}) {
     return this.all(`WITH page AS (
@@ -255,6 +266,7 @@ export class Store {
       GROUP BY o.event_id
     )
     SELECT e.*,p.name AS place_name,p.address AS place_address,p.map_url AS place_map_url,
+      (${REGISTRATION_OPEN}) AS registration_open,
       COALESCE(s.enabled,0) AS questions_enabled,s.closes_at AS questions_closes_at,
       COALESCE(s.max_questions,3) AS questions_max,
       COALESCE(r.occupied,0) AS occupied, e.capacity-COALESCE(r.occupied,0) AS remaining,
@@ -268,10 +280,10 @@ export class Store {
     ORDER BY e.id DESC`, ...paging(limit, offset));
   }
   async listEventSummaries({ limit = 100, offset = 0 } = {}) {
-    return this.all('SELECT id,name,active FROM events WHERE archived=0 ORDER BY id DESC LIMIT ? OFFSET ?', ...paging(limit, offset));
+    return this.all(`SELECT id,name,active,(${REGISTRATION_OPEN}) AS registration_open FROM events e WHERE archived=0 ORDER BY id DESC LIMIT ? OFFSET ?`, ...paging(limit, offset));
   }
   async getEventSummary(id) {
-    return this.one('SELECT id,name,active FROM events WHERE id=? AND archived=0', Number(id));
+    return this.one(`SELECT id,name,active,(${REGISTRATION_OPEN}) AS registration_open FROM events e WHERE id=? AND archived=0`, Number(id));
   }
   async getEvent(id) { return this.one(`${this.eventSelect()} WHERE e.id=?`, Number(id)); }
   async saveEvent(data, id = null) {
@@ -305,16 +317,17 @@ export class Store {
       if (endTime <= Date.parse(startsAt)) throw domainError('INVALID_INPUT', 'زمان پایان باید بعد از زمان شروع باشد');
     }
     const posterUrl = string(v.poster_url || '', 'پوستر رویداد', 500000);
+    const registrationClosesAt = v.registration_closes_at == null ? null : int(v.registration_closes_at, 'مهلت ثبت‌نام', 253402300799);
     const values = [string(v.name, 'نام رویداد', 200, true), string(v.description, 'توضیحات', 3500), placeId, capacity,
       int(v.max_per_user, 'سقف هر نفر', 100), paid, price, pricingMode, fumStudentPrice,
-      string(v.payment_instructions, 'دستور پرداخت', 1500), startsAt, endsAt, posterUrl, flag(v.active)];
+      string(v.payment_instructions, 'دستور پرداخت', 1500), startsAt, endsAt, posterUrl, flag(v.active), registrationClosesAt];
     const settings = data.question_settings === undefined ? null : questionSettingsValues(data.question_settings);
     const event = id
       ? this.stmt(`UPDATE events SET name=?,description=?,place_id=?,capacity=?,max_per_user=?,is_paid=?,price=?,
-        pricing_mode=?,fum_student_price=?,payment_instructions=?,starts_at=?,ends_at=?,poster_url=?,active=?,updated_at=unixepoch()
+        pricing_mode=?,fum_student_price=?,payment_instructions=?,starts_at=?,ends_at=?,poster_url=?,active=?,registration_closes_at=?,updated_at=unixepoch()
         WHERE id=?${settings ? ' AND archived=0' : ''}`, ...values, Number(id))
-      : this.stmt(`INSERT INTO events(name,description,place_id,capacity,max_per_user,is_paid,price,pricing_mode,fum_student_price,payment_instructions,starts_at,ends_at,poster_url,active)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, ...values);
+      : this.stmt(`INSERT INTO events(name,description,place_id,capacity,max_per_user,is_paid,price,pricing_mode,fum_student_price,payment_instructions,starts_at,ends_at,poster_url,active,registration_closes_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, ...values);
     let saved, savedSettings;
     try {
       if (settings) {
@@ -398,12 +411,17 @@ export class Store {
       u.first_name,u.last_name,u.phone,u.username FROM orders o JOIN events e ON e.id=o.event_id
       JOIN users u ON u.id=o.user_id LEFT JOIN places p ON p.id=e.place_id`;
   }
-  async getEventPricing(userId, eventId, exactStudentNumberLength = null, { requirePhone = false } = {}) {
+  async getEventPricing(userId, eventId, exactStudentNumberLength = null, { requirePhone = false, allowGuest = false } = {}) {
     userId = int(userId, 'شناسه کاربر'); eventId = int(eventId, 'شناسه رویداد');
     const [user, event] = await Promise.all([this.getUser(userId), this.getEvent(eventId)]);
-    if (!event || !event.active || event.archived) throw domainError('EVENT_INACTIVE', 'این رویداد موجود نیست یا ثبت‌نام آن متوقف شده است');
-    if (!user || (requirePhone && !user.phone)) throw domainError('ACCOUNT_REQUIRED', 'ابتدا حساب کاربری بسازید');
-    return { event, ...resolveEventPricing(event, user.profile, configuredStudentNumberLength(exactStudentNumberLength)) };
+    if (!event?.registration_open) throw domainError('EVENT_INACTIVE', 'این رویداد موجود نیست یا ثبت‌نام آن متوقف شده است');
+    if (!user || (requirePhone && !user.phone)) {
+      if (allowGuest) return { event, account_required: true };
+      throw domainError('ACCOUNT_REQUIRED', 'ابتدا حساب کاربری بسازید');
+    }
+    return { event, ...resolveEventPricing(event, user.profile, configuredStudentNumberLength(exactStudentNumberLength)),
+      requires_tariff_choice: event.pricing_mode === 'differentiated' && user.profile.short_registration === true
+        && !Object.hasOwn(user.profile, 'is_fum_student') };
   }
   async quoteOrder(userId, eventId, quantity, exactStudentNumberLength = null) {
     quantity = int(quantity, 'تعداد بلیت', 100);
@@ -445,7 +463,7 @@ export class Store {
         const results = await this.db.batch([
           this.stmt(`INSERT INTO orders(id,request_key,user_id,event_id,quantity,unit_price,pricing_group,status,expires_at)
             SELECT ?,?,u.id,e.id,?,?,?,?,CASE WHEN ?>0 THEN unixepoch()+900 ELSE NULL END
-            FROM events e,users u WHERE e.id=? AND u.id=? AND e.active=1 AND e.archived=0 AND u.is_deleted=0 AND ${pricingGuard}`,
+            FROM events e,users u WHERE e.id=? AND u.id=? AND ${REGISTRATION_OPEN} AND u.is_deleted=0 AND ${pricingGuard}`,
             id, key, quantity, quote.unit_price, quote.pricing_group,
             quote.unit_price > 0 ? 'reserved' : 'approved', quote.unit_price,
             eventId, userId, ...pricingValues),
@@ -453,7 +471,11 @@ export class Store {
             SELECT json_extract(value,'$.id'),json_extract(value,'$.token'),json_extract(value,'$.checkin_code'),? FROM json_each(?)
             WHERE EXISTS(SELECT 1 FROM orders WHERE id=?)`, id, JSON.stringify(tickets), id),
         ]);
-        if (Number(results[0]?.meta?.changes) !== 1) throw domainError('PRICE_CHANGED');
+        if (Number(results[0]?.meta?.changes) !== 1) {
+          const event = await this.getEvent(eventId);
+          if (!event?.registration_open) throw domainError('EVENT_INACTIVE', 'این رویداد موجود نیست یا ثبت‌نام آن متوقف شده است');
+          throw domainError('PRICE_CHANGED');
+        }
         break;
       } catch (e) {
         // A retry racing the original request returns its booking; only short-code collisions are retried.
