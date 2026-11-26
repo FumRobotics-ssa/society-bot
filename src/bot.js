@@ -560,7 +560,7 @@ export async function handleUpdate(update, env, store) {
     }
     if (command === 'get_account') {
       const user = await needAccount();
-      if (user) return send(paragraphs('👤 حساب من', userText(user)), MENU);
+      if (user) return send(`👤 حساب من\n${userText(user)}`, MENU);
       return;
     }
     if (command === 'complete_student_info') {
