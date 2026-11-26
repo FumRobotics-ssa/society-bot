@@ -19,12 +19,18 @@ export async function receiveUpdate(env, update) {
 export async function processInbox(env, limit = 1) {
   const store = new Store(env.DB);
   for (let i = 0; i < limit; i++) {
-    const job = await env.DB.prepare(`UPDATE inbox SET status='processing',lease_until=?,attempts=attempts+1
-      WHERE update_id=(SELECT q.update_id FROM inbox q WHERE ((q.status='new' AND q.available_at<=?) OR
-      (q.status='processing' AND q.lease_until<?)) AND NOT EXISTS (
-        SELECT 1 FROM inbox earlier WHERE earlier.stream_key=q.stream_key
-        AND earlier.update_id<q.update_id AND earlier.status IN ('new','processing')
-      ) ORDER BY q.update_id LIMIT 1) RETURNING *`).bind(now() + 90, now(), now()).first();
+    const at = now();
+    // Find each stream's head using only active rows. A head in backoff still blocks later updates.
+    const job = await env.DB.prepare(`WITH stream_heads AS (
+      SELECT MIN(update_id) AS update_id FROM inbox INDEXED BY inbox_pending
+      WHERE status IN ('new','processing') GROUP BY stream_key
+    )
+    UPDATE inbox SET status='processing',lease_until=?,attempts=attempts+1
+    WHERE update_id=(
+      SELECT q.update_id FROM stream_heads h JOIN inbox q ON q.update_id=h.update_id
+      WHERE (q.status='new' AND q.available_at<=?) OR (q.status='processing' AND q.lease_until<?)
+      ORDER BY q.update_id LIMIT 1
+    ) RETURNING *`).bind(at + 90, at, at).first();
     if (!job) return;
     try {
       await handleUpdate(JSON.parse(job.payload), env, store);
@@ -101,8 +107,8 @@ export async function maintenance(env, at = new Date()) {
   await env.DB.batch([
     env.DB.prepare('DELETE FROM login_codes WHERE expires_at<?').bind(now()),
     env.DB.prepare('DELETE FROM admin_sessions WHERE expires_at<?').bind(now()),
-    env.DB.prepare("DELETE FROM inbox WHERE status='done' AND processed_at<?").bind(now() - 7 * 86400),
-    env.DB.prepare("DELETE FROM outbox WHERE status='sent' AND sent_at<?").bind(now() - 7 * 86400),
+    env.DB.prepare("DELETE FROM inbox INDEXED BY inbox_retention WHERE status='done' AND processed_at<?").bind(now() - 7 * 86400),
+    env.DB.prepare("DELETE FROM outbox INDEXED BY outbox_retention WHERE status='sent' AND sent_at<?").bind(now() - 7 * 86400),
   ]);
   // Queue once per UTC day on the first cron run, even if the midnight run was delayed.
   if (env.BACKUP_CHAT || env.S3_BUCKET) {
