@@ -167,9 +167,17 @@ async function api(path, options = {}) {
 }
 async function action(button, task) {
   if (button?.disabled) return;
-  if (button) button.disabled = true;
+  if (button) {
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+  }
   try { await task(); } catch (error) { toast(error.message || 'خطایی رخ داد'); }
-  finally { if (button) button.disabled = false; }
+  finally {
+    if (button) {
+      button.removeAttribute('aria-busy');
+      button.disabled = false;
+    }
+  }
 }
 function button(label, handler, classes = 'button secondary small') {
   const node = el('button', label, classes);
