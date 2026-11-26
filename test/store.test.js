@@ -168,6 +168,36 @@ test('expired orders release capacity and cannot later be approved', async t => 
   assert.equal((await store.getOrder(first.order.id)).status, 'expired');
 });
 
+test('expiry queues one notice for a paid reservation that ran out of time before receiving a receipt', async t => {
+  const { store, event, db } = await fixture(t, { capacity: 5, paid: true });
+  const reserve = async id => (await store.reserve(id, event.id, 1, `expiry-${id}`)).order;
+  const late = await reserve(1);
+  const submitted = await reserve(2);
+  const alreadyExpired = await reserve(3);
+  const deleted = await reserve(4);
+  const stillOpen = await reserve(5);
+  await store.submitReceipt(submitted.id, 2, 'on-time');
+  await store.deleteUser(4);
+  const past = db.native.prepare('UPDATE orders SET expires_at=unixepoch()-1 WHERE id=?');
+  for (const order of [late, submitted, deleted]) past.run(order.id);
+  db.native.prepare("UPDATE orders SET status='expired' WHERE id=?").run(alreadyExpired.id);
+
+  const sweeps = await Promise.all([store.expireOrders(), store.expireOrders()]);
+  assert.equal(sweeps.reduce((total, sweep) => total + sweep.expired, 0), 3);
+  for (const order of [late, submitted, alreadyExpired, deleted]) {
+    assert.equal((await store.getOrder(order.id)).status, 'expired');
+  }
+  assert.equal((await store.getOrder(stillOpen.id)).status, 'reserved');
+  const jobs = await store.all('SELECT method,payload,dedupe_key FROM outbox');
+  assert.equal(jobs.length, 1);
+  const [job] = jobs;
+  const payload = JSON.parse(job.payload);
+  assert.equal(job.method, 'sendMessage');
+  assert.equal(job.dedupe_key, `receipt-expired:${late.id}`);
+  assert.equal(payload.chat_id, 1);
+  assert.match(payload.text, /مهلت ارسال رسید برای «تئاتر» تمام شد/);
+});
+
 test('receipt belongs to purchaser and duplicate submission does not extend its deadline', async t => {
   const { store, event, db } = await fixture(t, { paid: true });
   const { order } = await store.reserve(1, event.id, 1, 'receipt');
