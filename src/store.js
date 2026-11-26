@@ -1,5 +1,7 @@
 import { configuredStudentNumberLength, normalizeDigits, resolveEventPricing } from './pricing.js';
 
+export const SUPPORT_CONTACT = 'به اکانت پشتیبانی انجمن رباتیک دانشگاه فردوسی مشهد @FUMrs_admin پیام بدهید.';
+
 const OCCUPIED = "(status='approved' OR (status IN ('reserved','pending') AND expires_at>unixepoch()))";
 const QUESTIONS_OPEN = 'e.archived=0 AND s.enabled=1 AND s.closes_at>unixepoch()';
 const QUESTION_WINDOW = `EXISTS (
@@ -569,7 +571,7 @@ export class Store {
   }
   async expireOrders() {
     const cutoff = Math.floor(Date.now() / 1000);
-    const notice = '⏳ مهلت ارسال رسید برای «%s» تمام شد و جای رزروشده آزاد شد.\n\nاگر مبلغ را واریز کرده‌اید، برای پیگیری با برگزارکننده تماس بگیرید. اگر هنوز پرداخت نکرده‌اید، می‌توانید از «رویدادها» دوباره برای ثبت‌نام اقدام کنید.';
+    const notice = `⏳ مهلت ارسال رسید برای «%s» تمام شد و جای رزروشده آزاد شد.\n\nاگر مبلغ را واریز کرده‌اید، برای پیگیری ${SUPPORT_CONTACT}\n\nاگر هنوز پرداخت نکرده‌اید، می‌توانید از «رویدادها» دوباره برای ثبت‌نام اقدام کنید.`;
     const [, expired] = await this.db.batch([
       this.stmt(`INSERT INTO outbox(id,method,payload,dedupe_key)
         SELECT 'receipt-expired:' || o.id,'sendMessage',json_object('chat_id',o.user_id,'text',printf(?,e.name)),
