@@ -385,6 +385,68 @@ test('Telegram 429 backs off durable outbox without dropping message', async () 
   try { await processOutbox(env, 1); } finally { globalThis.fetch = original; }
   const job = await db.prepare('SELECT * FROM outbox').first(); assert.equal(job.status, 'pending'); assert.ok(job.available_at >= Math.floor(Date.now() / 1000) + 59); db.close();
 });
+
+test('uncertain receipt sends are held for panel review without resending the same media', async t => {
+  const { db, env, store } = fixture();
+  t.after(() => db.close());
+  await store.enqueue('sendPhoto', { chat_id: 1, photo: 'fixture-photo' }, 'receipt:timeout:photo');
+  await store.enqueue('sendPhoto', { chat_id: 1, photo: 'fixture-photo' }, 'receipt:interrupted:photo');
+  await store.enqueue('sendDocument', { chat_id: 1, document: 'fixture-pdf' }, 'receipt:old-retry:pdf');
+  await store.enqueue('sendMessage', { chat_id: 1, text: 'Regular message' }, 'regular');
+  await db.prepare("UPDATE outbox SET status='processing',attempts=1,lease_until=0 WHERE dedupe_key='receipt:interrupted:photo'").run();
+  await db.prepare("UPDATE outbox SET attempts=1,last_error='Timed out' WHERE dedupe_key='receipt:old-retry:pdf'").run();
+
+  const calls = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (_url, request) => {
+    const payload = JSON.parse(request.body);
+    calls.push(payload);
+    if (payload.photo) throw new DOMException('Timed out', 'TimeoutError');
+    return Response.json({ ok: true });
+  };
+  try {
+    await processOutbox(env);
+    await db.prepare("UPDATE outbox SET available_at=0 WHERE status='pending'").run();
+    await processOutbox(env);
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.equal(calls.filter(payload => payload.photo || payload.document).length, 1);
+  assert.equal(calls.filter(payload => payload.text).length, 1);
+  const held = await store.all("SELECT status,attempts,last_error FROM outbox WHERE dedupe_key LIKE 'receipt:%'");
+  assert.equal(held.length, 3);
+  for (const row of held) {
+    assert.equal(row.status, 'failed');
+    assert.equal(row.attempts, 1);
+    assert.match(row.last_error, /Receipt delivery unconfirmed/);
+  }
+});
+
+test('a receipt is retried after Telegram explicitly rejects the send with a rate limit', async t => {
+  const { db, env, store } = fixture();
+  t.after(() => db.close());
+  await store.enqueue('sendDocument', { chat_id: 1, document: 'fixture-pdf' }, 'receipt:rate-limit:pdf');
+  let requests = 0;
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => ++requests === 1
+    ? Response.json({ ok: false, error_code: 429, parameters: { retry_after: 60 } }, { status: 429 })
+    : Response.json({ ok: true });
+  try {
+    await processOutbox(env);
+    const first = await store.one('SELECT status,last_error,available_at FROM outbox');
+    assert.equal(first.status, 'pending');
+    assert.match(first.last_error, /^Telegram 429:/);
+    assert.ok(first.available_at >= Math.floor(Date.now() / 1000) + 59);
+    await db.prepare('UPDATE outbox SET available_at=0').run();
+    await processOutbox(env);
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.equal(requests, 2);
+  const sent = await store.one('SELECT status,attempts FROM outbox');
+  assert.equal(sent.status, 'sent');
+  assert.equal(sent.attempts, 2);
+});
 test('sender ordering blocks later updates during retry backoff but permits other senders', async () => {
   const { db, env } = fixture();
   await receiveUpdate(env, { update_id: 1, message: { from: { id: 2 } } });

@@ -4,6 +4,7 @@ import { now } from './auth.js';
 import { runBackup } from './backup.js';
 
 const changes = result => result.meta?.changes || 0;
+const receiptDeliveryUnconfirmed = 'Receipt delivery unconfirmed. Review the receipt in the admin panel.';
 function cleanError(error, env) {
   let text = String(error?.message || 'job failed').slice(0, 500);
   for (const key of ['BOT_TOKEN', 'WEBHOOK_SECRET', 'S3_SECRET_ACCESS_KEY', 'S3_ACCESS_KEY_ID']) {
@@ -66,7 +67,7 @@ async function broadcast(job, env) {
   }
   if (statements.length) await env.DB.batch(statements);
 }
-async function telegram(method, data, env) {
+async function telegram(method, data, env, timeout) {
   if (!/^[A-Za-z]+$/.test(method)) throw new Error('Unknown Telegram method');
   let body, headers;
   if (Object.hasOwn(data, '_documentText')) {
@@ -74,30 +75,47 @@ async function telegram(method, data, env) {
     for (const [key, value] of Object.entries(data)) if (!['_documentText', 'filename'].includes(key)) body.set(key, typeof value === 'object' ? JSON.stringify(value) : String(value));
     body.set('document', new Blob([data._documentText], { type: data.filename?.endsWith('.csv') ? 'text/csv;charset=utf-8' : 'application/json' }), data.filename || 'export.json');
   } else { body = JSON.stringify(data); headers = { 'Content-Type': 'application/json' }; }
-  const response = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, { method: 'POST', headers, body, signal: AbortSignal.timeout(10000) });
+  const response = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, { method: 'POST', headers, body, signal: AbortSignal.timeout(timeout) });
   const result = await response.json();
   if (!result.ok) {
     const error = new Error(`Telegram ${result.error_code || response.status}: ${result.description || 'request failed'}`);
     error.retryAfter = result.parameters?.retry_after;
+    error.safeToRetry = result.error_code === 429;
     error.permanent = [400, 403, 404].includes(result.error_code);
     throw error;
   }
 }
 export async function processOutbox(env, limit = 8) {
   for (let i = 0; i < limit; i++) {
-    const job = await env.DB.prepare(`UPDATE outbox SET status='processing',lease_until=?,attempts=attempts+1
-      WHERE id=(SELECT id FROM outbox WHERE (status='pending' AND available_at<=?) OR
-      (status='processing' AND lease_until<?) ORDER BY available_at,created_at LIMIT 1) RETURNING *`).bind(now() + 90, now(), now()).first();
+    const at = now();
+    // A timed-out receipt send or an expired send lease may already have posted the media.
+    const job = await env.DB.prepare(`WITH next_job AS MATERIALIZED (
+      SELECT id, method IN ('sendPhoto','sendDocument') AND COALESCE(dedupe_key,'') LIKE 'receipt:%'
+        AND (status='processing' OR (last_error IS NOT NULL AND last_error NOT LIKE 'Telegram 429:%')) AS uncertain_receipt
+      FROM outbox WHERE (status='pending' AND available_at<=?) OR (status='processing' AND lease_until<?)
+      ORDER BY available_at,created_at LIMIT 1
+    )
+    UPDATE outbox SET
+      status=CASE WHEN next_job.uncertain_receipt THEN 'failed' ELSE 'processing' END,
+      lease_until=CASE WHEN next_job.uncertain_receipt THEN 0 ELSE ? END,
+      attempts=attempts + (NOT next_job.uncertain_receipt),
+      last_error=CASE WHEN next_job.uncertain_receipt THEN ? ELSE last_error END
+    FROM next_job WHERE outbox.id=next_job.id RETURNING *`).bind(at, at, at + 90, receiptDeliveryUnconfirmed).first();
     if (!job) return;
+    if (job.status === 'failed') continue;
+    const receiptDelivery = job.dedupe_key?.startsWith('receipt:') && ['sendPhoto', 'sendDocument'].includes(job.method);
     try {
       if (job.method === '__broadcast') await broadcast(job, env);
       else if (job.method === '__backup') await runBackup(env, job.id);
-      else await telegram(job.method, JSON.parse(job.payload), env);
+      else await telegram(job.method, JSON.parse(job.payload), env, receiptDelivery ? 25000 : 10000);
       await env.DB.prepare("UPDATE outbox SET status='sent',sent_at=?,last_error=NULL WHERE id=? AND lease_until=?").bind(now(), job.id, job.lease_until).run();
     } catch (error) {
-      const failed = error.permanent || job.attempts >= 10;
+      const uncertainReceipt = receiptDelivery && !error.permanent && !error.safeToRetry;
+      const failed = uncertainReceipt || error.permanent || job.attempts >= 10;
+      const detail = cleanError(error, env);
       await env.DB.prepare('UPDATE outbox SET status=?,available_at=?,last_error=? WHERE id=? AND lease_until=?')
-        .bind(failed ? 'failed' : 'pending', now() + Math.max(2, Number(error.retryAfter || Math.min(3600, 2 ** job.attempts * 3))), cleanError(error, env), job.id, job.lease_until).run();
+        .bind(failed ? 'failed' : 'pending', now() + Math.max(2, Number(error.retryAfter || Math.min(3600, 2 ** job.attempts * 3))),
+          uncertainReceipt ? `${receiptDeliveryUnconfirmed} ${detail}` : detail, job.id, job.lease_until).run();
     }
   }
 }
