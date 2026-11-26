@@ -8,6 +8,9 @@ const tehranClock = new Intl.DateTimeFormat('en-US-u-ca-gregory-nu-latn', {
   timeZone: 'Asia/Tehran', year: 'numeric', month: '2-digit', day: '2-digit',
   hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
 });
+const tehranEventDay = new Intl.DateTimeFormat('fa-IR-u-ca-persian', {
+  timeZone: 'Asia/Tehran', dateStyle: 'long',
+});
 const faDigits = '۰۱۲۳۴۵۶۷۸۹';
 
 export const jalaliMonths = [
@@ -72,6 +75,26 @@ export function formatJalaliDate({ year, month, day }) {
 }
 
 function tehranParts(date) { return parts(tehranClock, date); }
+
+function schedulePart(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  const { hour, minute } = tehranParts(date);
+  return {
+    day: tehranEventDay.format(date),
+    time: persianNumber(minute ? `${hour}:${String(minute).padStart(2, '0')}` : hour),
+  };
+}
+
+export function formatEventSchedule(startsAt, endsAt) {
+  const start = schedulePart(startsAt);
+  if (!start) return String(startsAt || '');
+  const end = schedulePart(endsAt);
+  if (!end) return `${start.day}، ساعت ${start.time}`;
+  if (start.day === end.day) return `${start.day}، از ساعت ${start.time} تا ${end.time}`;
+  return `از ${start.day} ساعت ${start.time} تا ${end.day} ساعت ${end.time}`;
+}
 
 export function tehranDateTime(value = new Date()) {
   const date = new Date(value);

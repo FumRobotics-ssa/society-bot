@@ -1,4 +1,4 @@
-import { formatJalaliDate, jalaliFirstWeekday, jalaliMonthLength, jalaliMonths, jalaliTimeToIso, latinNumber, parseJalaliDate, persianNumber, tehranDateTime } from './jalali.js';
+import { formatEventSchedule, formatJalaliDate, jalaliFirstWeekday, jalaliMonthLength, jalaliMonths, jalaliTimeToIso, latinNumber, parseJalaliDate, persianNumber, tehranDateTime } from './jalali.js';
 
 /* Admin credentials live only in an HttpOnly server session; no persistent browser tokens. */
 const $ = (id) => document.getElementById(id);
@@ -318,9 +318,11 @@ function eventCard(event, editable) {
   card.append(el('h3', event.name), el('p', event.description || 'توضیحی برای این رویداد ثبت نشده', 'description'));
   const meta = el('div', null, 'event-meta');
   const place = state.places.find((place) => String(place.id) === String(event.place_id));
-  const fields = [['زمان شروع', date(event.starts_at)]];
-  if (event.ends_at) fields.push(['زمان پایان', date(event.ends_at)]);
-  fields.push(['مکان', place?.name || event.place_name || 'تعیین نشده'], ['سقف هر نفر', number(event.max_per_user) + ' بلیت']);
+  const fields = [
+    ['زمان برگزاری', formatEventSchedule(event.starts_at, event.ends_at) || 'زمان تعیین نشده'],
+    ['مکان', place?.name || event.place_name || 'تعیین نشده'],
+    ['سقف هر نفر', number(event.max_per_user) + ' بلیت'],
+  ];
   for (const [label, value] of fields) {
     const cell = el('div', label); cell.append(el('strong', value)); meta.append(cell);
   }

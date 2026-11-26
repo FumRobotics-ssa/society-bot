@@ -1,6 +1,7 @@
 import { createLoginCode } from './auth.js';
 import { neshanUrl } from './store.js';
 import { configuredStudentNumberLength, isFumStudent, isValidStudentNumber, normalizeStudentNumber, pricingGroupLabel } from './pricing.js';
+import { formatEventSchedule } from '../public/jalali.js';
 
 const FA_DIGITS = '۰۱۲۳۴۵۶۷۸۹';
 const AR_DIGITS = '٠١٢٣٤٥٦٧٨٩';
@@ -105,8 +106,7 @@ function eventText(event, { forAdmin = false, includeDescription = true } = {}) 
   const address = event.address || event.place_address;
   const mapUrl = neshanUrl(event.place_map_url);
   const schedule = [
-    `🕒 زمان شروع: ${eventTime(event.starts_at)}`,
-    event.ends_at ? `زمان پایان: ${eventTime(event.ends_at)}` : '',
+    `🕒 ${formatEventSchedule(event.starts_at, event.ends_at) || 'زمان برگزاری اعلام نشده'}`,
     `📍 مکان: ${event.place_name || 'اعلام نشده'}`,
     address ? `نشانی: ${address}` : '',
     mapUrl ? `موقعیت در نشان: ${mapUrl}` : '',
@@ -560,7 +560,7 @@ export async function handleUpdate(update, env, store) {
     }
     if (command === 'get_account') {
       const user = await needAccount();
-      if (user) return send(paragraphs('👤 حساب من', userText(user)), MENU);
+      if (user) return send(`👤 حساب من\n${userText(user)}`, MENU);
       return;
     }
     if (command === 'complete_student_info') {
