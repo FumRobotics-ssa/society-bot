@@ -116,7 +116,8 @@ function eventText(event, { forAdmin = false, includeDescription = true } = {}) 
     `ظرفیت: ${event.capacity}`,
     forAdmin && event.remaining != null ? `ظرفیت باقی‌مانده: ${event.remaining}` : '',
     `سقف بلیت برای هر نفر: ${event.max_per_user}`,
-    `وضعیت ثبت‌نام: ${event.active ? 'فعال' : 'غیرفعال'}`,
+    `وضعیت ثبت‌نام: ${event.registration_open ? 'فعال' : 'غیرفعال'}`,
+    event.registration_closes_at ? `مهلت ثبت‌نام: ${eventTime(event.registration_closes_at * 1000)}` : '',
   ].filter(Boolean).join('\n');
   return paragraphs(`📅 ${event.name}`, includeDescription && event.description, schedule, registration, prices);
 }
@@ -197,7 +198,6 @@ export async function handleUpdate(update, env, store) {
     return user;
   };
   const showEvents = async (offset = 0) => {
-    if (!await needAccount()) return;
     const events = await store.listEvents({ activeOnly: true, limit: 20, offset });
     if (!events.length) return send('📅 فعلاً ثبت‌نام هیچ رویدادی باز نیست.', MENU);
     const buttons = events.map(e => [{ text: String(e.name).slice(0, 70), callback_data: `e:${e.id}` }]);
@@ -209,7 +209,7 @@ export async function handleUpdate(update, env, store) {
     const events = await store.listEventSummaries({ limit: EVENT_LINK_PAGE_SIZE + 1, offset });
     const buttons = events.slice(0, EVENT_LINK_PAGE_SIZE).map(event => {
       const title = Array.from(event.name).slice(0, 40).join('');
-      const status = event.active ? 'فعال' : 'غیرفعال';
+      const status = event.registration_open ? 'فعال' : 'غیرفعال';
       return [{ text: `${title} · ${status} · #${event.id}`, callback_data: `el:${event.id}` }];
     });
     if (events.length > EVENT_LINK_PAGE_SIZE) buttons.push([{ text: 'صفحه بعد', callback_data: `elp:${offset + EVENT_LINK_PAGE_SIZE}` }]);
@@ -222,20 +222,35 @@ export async function handleUpdate(update, env, store) {
     if (!event) return send('رویداد پیدا نشد یا بایگانی شده است', MENU);
     const username = await botUsername(env.BOT_TOKEN);
     const url = `https://t.me/${username}?start=${EVENT_LINK_PREFIX}${event.id}`;
-    const status = event.active ? '' : 'پس از باز شدن ثبت‌نام، همین لینک کار می‌کند.';
+    const status = event.registration_open ? '' : 'پس از باز شدن ثبت‌نام، همین لینک کار می‌کند.';
     return send(paragraphs(`🔗 لینک ثبت‌نام «${event.name}»`, url, status), {
       inline_keyboard: [[{ text: 'کپی لینک ثبت‌نام', copy_text: { text: url } }]],
     });
   };
-  const selectEvent = async (eventId, { linked = false, afterSignup = false } = {}) => {
+  const sendEventDetails = async (event, extra, markup) => {
+    const details = paragraphs(eventText(event), extra);
+    let poster = event.poster_url;
+    if (poster && !/^https?:\/\//i.test(poster)) poster = link(env, `/api/events/${event.id}/poster`);
+    if (poster && details.length <= CAPTION_LIMIT) return sendPhoto(poster, details, markup);
+    if (poster) await sendPhoto(poster, `📅 ${event.name}`);
+    if (details.length > MESSAGE_LIMIT && event.description) {
+      await send(`📝 توضیحات «${event.name}»\n\n${event.description}`, undefined, 'event_description');
+      return send(paragraphs(eventText(event, { includeDescription: false }), extra), markup);
+    }
+    return send(details, markup);
+  };
+  const selectEvent = async (eventId, { begin = false, afterSignup = false } = {}) => {
     const id = positive(eventId);
     let pricing;
     try {
-      pricing = await store.getEventPricing(from.id, id, env.FUM_STUDENT_NUMBER_LENGTH, { requirePhone: true });
+      pricing = await store.getEventPricing(from.id, id, env.FUM_STUDENT_NUMBER_LENGTH, { requirePhone: true, allowGuest: true });
     } catch (error) {
       if (afterSignup && error.code === 'EVENT_INACTIVE') return transition('idle', {}, `ℹ️ ${error.message}`, MENU);
-      if (error.code !== 'ACCOUNT_REQUIRED') throw error;
-      if (!linked) return send(ACCOUNT_REQUIRED);
+      throw error;
+    }
+    const { event } = pricing;
+    if (pricing.account_required) {
+      if (!begin) return sendEventDetails(event, '', { inline_keyboard: [[{ text: 'ثبت‌نام', callback_data: `register:${id}` }]] });
       const existing = await store.getState(from.id);
       if (existing?.step.startsWith('signup:')) {
         return transition(existing.step, { ...stateData(existing), registration_event_id: id },
@@ -243,7 +258,15 @@ export async function handleUpdate(update, env, store) {
       }
       return startSignup(id);
     }
-    const { event } = pricing;
+    if (pricing.requires_tariff_choice) {
+      return transition('choose_event_tariff', { event_id: id }, paragraphs(
+        `🎫 تعرفهٔ ثبت‌نام «${event.name}»`,
+        'دانشجوی دانشگاه فردوسی مشهد هستید؟',
+      ), { inline_keyboard: [[
+        { text: `دانشجوی فردوسی · ${money(event.fum_student_price)} تومان`, callback_data: `tariff:y:${id}` },
+        { text: `عموم · ${money(event.price)} تومان`, callback_data: `tariff:n:${id}` },
+      ]] });
+    }
     if (pricing.requires_student_number) return promptFumStudentNumber(event.id);
     if (pricing.unit_price > 0 && !env.VERIFICATION_CHAT) {
       const message = 'ℹ️ ثبت‌نام این رویداد موقتاً بسته است. بخش بررسی پرداخت هنوز آماده نیست.';
@@ -254,22 +277,9 @@ export async function handleUpdate(update, env, store) {
       pricing.pricing_group === 'fum_student' && STUDENT_RATE_NOTE,
     );
     const nextStep = 'تعداد بلیت مورد نظر را وارد کنید.\nبرای انصراف، /cancel را بفرستید.';
-    const details = paragraphs(eventText(event), appliedPrice, nextStep);
     const markup = event.questions_open && await store.getEventQuestionAccess(event.id, from.id)
       ? { inline_keyboard: [[eventQuestionButton(event.id)]] } : undefined;
-    let poster = event.poster_url;
-    if (poster && !/^https?:\/\//i.test(poster)) poster = link(env, `/api/events/${event.id}/poster`);
-    if (poster && details.length <= CAPTION_LIMIT) {
-      await sendPhoto(poster, details, markup);
-    } else {
-      if (poster) await sendPhoto(poster, `📅 ${event.name}`);
-      if (details.length > MESSAGE_LIMIT && event.description) {
-        await send(`📝 توضیحات «${event.name}»\n\n${event.description}`, undefined, 'event_description');
-        await send(paragraphs(eventText(event, { includeDescription: false }), appliedPrice, nextStep), markup);
-      } else {
-        await send(details, markup);
-      }
-    }
+    await sendEventDetails(event, paragraphs(appliedPrice, nextStep), markup);
     await store.setState(from.id, 'reserve_quantity', { event_id: event.id, last_update_id: update.update_id });
   };
   const showOrders = async (offset = 0) => {
@@ -321,15 +331,16 @@ export async function handleUpdate(update, env, store) {
     await send(paragraphs(`💬 تیکت #${ticket.id} · ${ticket.event_name}\nوضعیت: ${SUPPORT_STATUSES[ticket.status]}`, ...history), { inline_keyboard: keyboard });
   };
   const startSignup = (eventId = null) => transition('signup:first_name', {
-    profile: {}, username: from.username || '', ...(eventId ? { registration_event_id: eventId } : {}),
+    profile: {}, username: from.username || '', ...(eventId ? { registration_event_id: eventId, quick_signup: true } : {}),
   }, paragraphs('👤 ساخت حساب کاربری', eventId && 'پس از ساخت حساب، ثبت‌نام همین رویداد را ادامه می‌دهید.', 'نام خود را وارد کنید.'));
-  const promptFumStudentNumber = async (eventId = null) => transition('fum_student_number', { event_id: eventId ? Number(eventId) : null },
+  const promptFumStudentNumber = async (eventId = null, chooseStudentTariff = false) => transition('fum_student_number',
+    { event_id: eventId ? Number(eventId) : null, choose_student_tariff: chooseStudentTariff },
     paragraphs(studentNumberPrompt(configuredStudentNumberLength(env.FUM_STUDENT_NUMBER_LENGTH)),
       'برای انصراف، /cancel را بفرستید.'));
   const saveFumStudentNumber = async (value, data = {}) => {
     const user = await needAccount();
     if (!user) return;
-    if (!isFumStudent(user.profile)) {
+    if (!data.choose_student_tariff && !isFumStudent(user.profile)) {
       await store.setState(from.id, 'idle', { last_update_id: update.update_id });
       return send('ℹ️ در حساب شما وضعیت دانشجویی فردوسی ثبت نشده است. تعرفهٔ عمومی برای این رویداد اعمال می‌شود.');
     }
@@ -338,7 +349,11 @@ export async function handleUpdate(update, env, store) {
     if (!isValidStudentNumber(number, exactLength)) {
       throw invalidStudentNumber(exactLength);
     }
-    await store.upsertUser({ id: from.id, username: user.username, profile: { student_number: number } });
+    const profile = { student_number: number };
+    if (data.choose_student_tariff) {
+      Object.assign(profile, { is_fum_student: true, is_student: true, is_mashhad_student: true, university_name: 'دانشگاه فردوسی مشهد' });
+    }
+    await store.upsertUser({ id: from.id, username: user.username, profile });
     if (data.event_id) {
       await send('✅ شمارهٔ دانشجویی در حساب شما ذخیره شد.');
       return selectEvent(data.event_id);
@@ -370,6 +385,24 @@ export async function handleUpdate(update, env, store) {
         return answer(parts[2] === 'y' ? '✅ پرداخت تأیید شد' : 'درخواست رد شد');
       }
       if (chat.type !== 'private') return answer('این گزینه از گفت‌وگوی خصوصی ربات در دسترس است');
+      const register = /^register:(\d{1,15})$/.exec(data);
+      if (register) { await selectEvent(register[1], { begin: true }); return answer(); }
+      const tariff = /^tariff:([yn]):(\d{1,15})$/.exec(data);
+      if (tariff) {
+        const state = await store.getState(from.id);
+        const current = stateData(state), eventId = Number(tariff[2]);
+        if (state?.step !== 'choose_event_tariff' || current.event_id !== eventId) return answer('این انتخاب دیگر فعال نیست');
+        const event = await store.getEvent(eventId);
+        if (!event?.registration_open || event.pricing_mode !== 'differentiated') {
+          await selectEvent(eventId, { afterSignup: true });
+        } else if (tariff[1] === 'y') {
+          await promptFumStudentNumber(eventId, true);
+        } else {
+          await store.upsertUser({ id: from.id, profile: { is_fum_student: false } });
+          await selectEvent(eventId, { afterSignup: true });
+        }
+        return answer();
+      }
       const supportOrder = /^sp:o:([a-zA-Z0-9-]{1,50})$/.exec(data);
       if (supportOrder) {
         const order = await store.getSupportOrder(supportOrder[1], from.id);
@@ -534,6 +567,7 @@ export async function handleUpdate(update, env, store) {
         }
         if (String(state.step).startsWith('signup:')) return await signupStep(state.step.slice(7), text, data, false);
         if (state.step === 'fum_student_number') return await saveFumStudentNumber(text, data);
+        if (state.step === 'choose_event_tariff') return send('تعرفه را از دکمه‌های زیر پیام انتخاب کنید.');
         if (state.step === 'reserve_quantity') {
           const quote = await store.quoteOrder(from.id, data.event_id, positive(text), configuredStudentNumberLength(env.FUM_STUDENT_NUMBER_LENGTH));
           const quoteNonce = crypto.randomUUID().replaceAll('-', '').slice(0, 12);
@@ -586,7 +620,7 @@ export async function handleUpdate(update, env, store) {
     const arg = (match[2] || '').trim();
     if (command === 'start') {
       const eventId = arg.startsWith(EVENT_LINK_PREFIX) ? arg.slice(EVENT_LINK_PREFIX.length) : '';
-      if (/^\d+$/.test(eventId)) return await selectEvent(eventId, { linked: true });
+      if (/^\d+$/.test(eventId)) return await selectEvent(eventId);
       if (arg.startsWith(EVENT_LINK_PREFIX)) return send('⚠️ لینک ثبت‌نام رویداد معتبر نیست.\n\nمی‌توانید رویدادهای فعال را از منوی «رویدادها» ببینید.', MENU);
       if (arg === 'availableEvents') return showEvents();
       return send('👋 به ربات انجمن علمی رباتیک خوش آمدید!\n\nبرای دیدن برنامه‌ها، «رویدادها» را بزنید. اگر هنوز حساب ندارید، با /add_account حساب بسازید.\n\nبلیت‌های صادرشده را در «بلیت‌های من» پیدا می‌کنید.', MENU);
@@ -867,6 +901,16 @@ export async function handleUpdate(update, env, store) {
       userText({ ...d, id: from.id }),
       'اگر اطلاعات درست است، «بله» را بزنید.',
     ), { inline_keyboard: YES_NO });
+    const saveAccount = async () => {
+      if (d.quick_signup) p.short_registration = true;
+      await store.upsertUser({ id: from.id, username: from.username || d.username, first_name: d.first_name, last_name: d.last_name, phone: d.phone, profile: p });
+      if (d.registration_event_id) {
+        await send('✅ حساب شما ساخته شد. حالا می‌توانید ثبت‌نام رویداد را ادامه دهید.', MENU, 'signup_complete');
+        return selectEvent(d.registration_event_id, { afterSignup: true });
+      }
+      await send('✅ حساب شما آماده است.\n\nبرای دیدن برنامه‌ها، «رویدادها» را بزنید.', MENU);
+      return store.setState(from.id, 'idle', { last_update_id: update.update_id });
+    };
     if (step === 'first_name') {
       if (isCallback) throw new Error('نام خود را در یک پیام متنی بفرستید.');
       d.first_name = name(input);
@@ -881,6 +925,7 @@ export async function handleUpdate(update, env, store) {
       if (isCallback || !message?.contact || message.contact.user_id !== from.id) throw new Error('برای فرستادن شمارهٔ همین حساب تلگرام، «ارسال شماره من» را بزنید.');
       d.phone = digits(message.contact.phone_number).replace(/\s/g, '');
       if (!/^\+?\d{7,15}$/.test(d.phone)) throw new Error('شماره معتبر نیست. دوباره «ارسال شماره من» را بزنید.');
+      if (d.quick_signup) return saveAccount();
       await send('✅ شمارهٔ تماس ثبت شد.', { remove_keyboard: true }, 'phone_saved');
       return next('gender', 'جنسیت را از گزینه‌های زیر انتخاب کنید.', { inline_keyboard: [[{ text: 'آقا', callback_data: 's:boy' }, { text: 'خانم', callback_data: 's:girl' }]] });
     }
@@ -952,13 +997,7 @@ export async function handleUpdate(update, env, store) {
         await send('ساخت حساب متوقف شد.\n\nبرای شروع دوباره، /add_account را بفرستید.', MENU);
         return store.setState(from.id, 'idle', { last_update_id: update.update_id });
       }
-      await store.upsertUser({ id: from.id, username: from.username || d.username, first_name: d.first_name, last_name: d.last_name, phone: d.phone, profile: p });
-      if (d.registration_event_id) {
-        await send('✅ حساب شما ساخته شد. حالا می‌توانید ثبت‌نام رویداد را ادامه دهید.', MENU, 'signup_complete');
-        return selectEvent(d.registration_event_id, { afterSignup: true });
-      }
-      await send('✅ حساب شما آماده است.\n\nبرای دیدن برنامه‌ها، «رویدادها» را بزنید.', MENU);
-      return store.setState(from.id, 'idle', { last_update_id: update.update_id });
+      return saveAccount();
     }
     throw new Error('این مرحله دیگر فعال نیست. با /cancel خارج شوید و برای ساخت حساب دوباره /add_account را بفرستید.');
   }

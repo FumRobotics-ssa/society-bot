@@ -305,7 +305,9 @@ function eventCard(event, editable) {
   const prices = event.pricing_mode === 'differentiated'
     ? `عموم ${number(event.price)} تومان · فردوسی ${number(event.fum_student_price)} تومان`
     : yes(event.is_paid) && Number(event.price) > 0 ? number(event.price) + ' تومان' : 'رایگان';
-  top.append(el('span', prices, 'muted'), el('span', yes(event.active) ? 'رزرو فعال' : 'رزرو غیرفعال', 'badge' + (yes(event.active) ? '' : ' muted')));
+  const registrationOpen = yes(event.registration_open);
+  const registrationStatus = registrationOpen ? 'رزرو فعال' : yes(event.active) ? 'مهلت ثبت‌نام گذشته' : 'رزرو غیرفعال';
+  top.append(el('span', prices, 'muted'), el('span', registrationStatus, 'badge' + (registrationOpen ? '' : ' muted')));
   card.append(top);
   if (event.poster_url) {
     const posterImg = el('img', null, 'event-card-poster-thumb');
@@ -324,13 +326,26 @@ function eventCard(event, editable) {
     ['مکان', place?.name || event.place_name || 'تعیین نشده'],
     ['سقف هر نفر', number(event.max_per_user) + ' بلیت'],
   ];
+  if (event.registration_closes_at) fields.push(['مهلت ثبت‌نام', date(event.registration_closes_at)]);
   for (const [label, value] of fields) {
     const cell = el('div', label); cell.append(el('strong', value)); meta.append(cell);
   }
   card.append(meta, eventRegistrationStats(event));
   const actions = el('div', null, 'actions');
   if (editable) {
-    actions.append(button('ویرایش', () => editEvent(event)), button(yes(event.active) ? 'توقف رزرو' : 'فعال کردن رزرو', async () => { await api('/api/events/' + encodeURIComponent(event.id), { method: 'PATCH', body: { active: !yes(event.active) } }); await load(); toast('وضعیت رزرو به‌روز شد'); }));
+    actions.append(button('ویرایش', () => editEvent(event)), button(yes(event.active) ? 'توقف رزرو' : 'فعال کردن رزرو', async () => {
+      const activating = !yes(event.active);
+      if (activating && !event.starts_at) {
+        editEvent(event);
+        const form = $('event-form');
+        form.dataset.requiresStart = 'true';
+        form.elements.namedItem('active').checked = true;
+        return;
+      }
+      await api('/api/events/' + encodeURIComponent(event.id), { method: 'PATCH', body: { active: activating } });
+      await load(); toast('وضعیت رزرو به‌روز شد');
+    }));
+    actions.append(button('کپی به پیش‌نویس', () => editEvent(event, { copy: true })));
     actions.append(button('حذف', async () => { if (!confirm('این رویداد حذف شود؟ سوابق سفارش‌ها باید در سرور حفظ شوند')) return; await api('/api/events/' + encodeURIComponent(event.id), { method: 'DELETE' }); await load(); toast('رویداد حذف شد'); }, 'button danger small'));
   } else actions.append(button('مشاهده بلیت‌ها', async () => { await navigate('tickets'); $('tickets-event').value = event.id; await load(); }));
   if (yes(event.questions_enabled)) actions.append(button('بررسی پرسش‌ها', () => openEventQuestions(event)));
@@ -422,17 +437,18 @@ function fillDateTime(dateId, timeId, value) {
   $(dateId).value = local ? formatJalaliDate(local) : '';
   $(timeId).value = local ? persianNumber(`${String(local.hour).padStart(2, '0')}:${String(local.minute).padStart(2, '0')}`) : '';
 }
-function editEvent(event = null) {
+function editEvent(event = null, { copy = false } = {}) {
   const form = $('event-form'); form.reset();
-  form.elements.namedItem('id').value = event?.id || '';
-  $('event-form-title').textContent = event ? 'ویرایش رویداد' : 'رویداد جدید';
+  form.elements.namedItem('id').value = copy ? '' : event?.id || '';
+  $('event-form-title').textContent = copy ? 'پیش‌نویس رویداد جدید' : event ? 'ویرایش رویداد' : 'رویداد جدید';
   ['name', 'description', 'place_id', 'capacity', 'max_per_user', 'price', 'payment_instructions'].forEach((key) => { form.elements.namedItem(key).value = event?.[key] ?? (key === 'max_per_user' ? 1 : key === 'price' ? 0 : ''); });
   form.elements.namedItem('pricing_mode').value = event?.pricing_mode || 'fixed';
   form.elements.namedItem('public_price').value = event?.price ?? 0;
   form.elements.namedItem('fum_student_price').value = event?.fum_student_price ?? 0;
-  form.elements.namedItem('active').checked = event ? yes(event.active) : true;
+  form.elements.namedItem('active').checked = copy ? false : event ? yes(event.active) : true;
   form.elements.namedItem('is_paid').checked = yes(event?.is_paid);
-  const posterUrl = event?.poster_url || '';
+  const posterUrl = copy ? '' : event?.poster_url || '';
+  if (copy) form.elements.namedItem('payment_instructions').value = '';
   $('event-poster-url').value = posterUrl;
   $('event-poster-url-input').value = /^https?:\/\//i.test(posterUrl) ? posterUrl : '';
   $('event-poster-file').value = '';
@@ -446,11 +462,13 @@ function editEvent(event = null) {
     $('event-poster-preview').src = '';
   }
   updateEventPricingFields();
-  form.dataset.requiresStart = String(!event || Boolean(event.starts_at));
-  fillDateTime('event-jalali-date', 'event-start-time', event?.starts_at);
-  fillDateTime('event-end-date', 'event-end-time', event?.ends_at);
-  fillDateTime('questions-date', 'questions-time', event?.questions_closes_at * 1000);
-  $('questions-enabled').checked = yes(event?.questions_enabled);
+  form.dataset.requiresStart = String(copy || !event || Boolean(event.starts_at));
+  const schedule = copy ? null : event;
+  fillDateTime('event-jalali-date', 'event-start-time', schedule?.starts_at);
+  fillDateTime('event-end-date', 'event-end-time', schedule?.ends_at);
+  fillDateTime('registration-date', 'registration-time', schedule?.registration_closes_at * 1000);
+  fillDateTime('questions-date', 'questions-time', schedule?.questions_closes_at * 1000);
+  $('questions-enabled').checked = yes(schedule?.questions_enabled);
   $('questions-max').value = event?.questions_max ?? 3;
   toggleQuestionFields();
   form.dataset.questionFields = JSON.stringify(readQuestionFields());
@@ -550,6 +568,7 @@ async function showSupportThread(id, offset = 0) {
 async function showTickets() {
   const eventId = $('tickets-event').value;
   $('export-tickets').href = query('/api/export/tickets', { eventId });
+  $('export-confirmed-tickets').href = query('/api/export/confirmed-participants', { audienceKey: eventId ? 'current:' + eventId : '' });
   $('print-tickets').href = query('/api/print', { eventId });
   const data = array(await api(query('/api/tickets', { eventId, limit: 50, offset: state.pages.tickets * 50 })), 'tickets');
   table($('tickets-list'), ['بلیت', 'شرکت‌کننده', 'رویداد', 'وضعیت', 'زمان ورود', 'پذیرش'], data.map((ticket) => {
@@ -561,7 +580,10 @@ async function showTickets() {
   pager($('tickets-list'), 'tickets', data.length);
 }
 async function showUsers() {
-  const data = array(await api(query('/api/users', { limit: 50, offset: state.pages.users * 50, search: $('users-search').value.trim(), audienceKey: $('users-event').value })), 'users');
+  const audienceKey = $('users-event').value;
+  $('export-confirmed-users').hidden = audienceKey === 'no-event';
+  $('export-confirmed-users').href = query('/api/export/confirmed-participants', { audienceKey });
+  const data = array(await api(query('/api/users', { limit: 50, offset: state.pages.users * 50, search: $('users-search').value.trim(), audienceKey })), 'users');
   table($('users-list'), ['نام', 'شناسه تلگرام', 'نام کاربری', 'شماره تماس', 'رویدادهای مرتبط', 'ثبت‌نام'], data.map((user) => [person(user), el('span', user.telegram_id || user.user_id || user.id, 'mono'), user.username ? '@' + user.username : '—', user.phone || '—', userEventLabels(user.event_names), date(user.created_at)]));
   pager($('users-list'), 'users', data.length);
 }
@@ -690,6 +712,9 @@ connectPicker('event-end-time', 'end-time-open', openTimePicker);
 $('event-end-clear').addEventListener('click', () => fillDateTime('event-end-date', 'event-end-time'));
 connectPicker('questions-date', 'questions-date-open', openJalaliCalendar);
 connectPicker('questions-time', 'questions-time-open', openTimePicker);
+connectPicker('registration-date', 'registration-date-open', openJalaliCalendar);
+connectPicker('registration-time', 'registration-time-open', openTimePicker);
+$('registration-clear').addEventListener('click', () => fillDateTime('registration-date', 'registration-time'));
 $('time-confirm').addEventListener('click', chooseTime);
 $('time-cancel').addEventListener('click', () => $('time-dialog').close());
 $('time-dialog').addEventListener('click', (event) => { if (event.target === $('time-dialog')) $('time-dialog').close(); });
@@ -723,7 +748,7 @@ $('event-form').addEventListener('submit', (event) => {
     const id = values.get('id');
     const startDay = values.get('starts_at_jalali');
     const startTime = values.get('starts_at_time');
-    const startsAt = form.dataset.requiresStart === 'true' || startDay || startTime
+    const startsAt = (form.dataset.requiresStart === 'true' && values.has('active')) || startDay || startTime
       ? jalaliTimeToIso(parseJalaliDate(startDay), startTime)
       : '';
     const endDay = values.get('ends_at_jalali');
@@ -738,6 +763,9 @@ $('event-form').addEventListener('submit', (event) => {
     const isPaid = pricingMode === 'differentiated' ? publicPrice > 0 || studentPrice > 0 : fixedPaid;
     const posterUrl = values.get('poster_url') || '';
     const body = { name: values.get('name').trim(), description: values.get('description').trim(), place_id: values.get('place_id') ? Number(values.get('place_id')) : null, capacity: Number(values.get('capacity')), max_per_user: Number(values.get('max_per_user')), price: publicPrice, fum_student_price: studentPrice, pricing_mode: pricingMode, poster_url: posterUrl, payment_instructions: values.get('payment_instructions').trim(), starts_at: startsAt, ends_at: endsAt, is_paid: isPaid, active: values.has('active') };
+    const registrationDay = $('registration-date').value, registrationTime = $('registration-time').value;
+    if (registrationTime && !registrationDay) throw new Error('تاریخ پایان ثبت‌نام را انتخاب کنید');
+    body.registration_closes_at = registrationDay ? Date.parse(jalaliTimeToIso(parseJalaliDate(registrationDay), registrationTime || '23:59')) / 1000 : null;
     const questionFields = readQuestionFields();
     if (JSON.stringify(questionFields) !== form.dataset.questionFields) {
       const { enabled, day, time, maxQuestions } = questionFields;

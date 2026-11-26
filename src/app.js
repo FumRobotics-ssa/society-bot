@@ -23,9 +23,8 @@ async function body(request, max = 1048576) {
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
   try { return JSON.parse(new TextDecoder().decode(bytes)); } catch { fail('JSON نامعتبر است'); }
 }
-export function csv(rows) {
-  if (!rows.length) return '\uFEFF';
-  const columns = Object.keys(rows[0]).filter(key => !['profile', 'profile_json', 'token'].includes(key));
+export function csv(rows, columns = Object.keys(rows[0] || {}).filter(key => !['profile', 'profile_json', 'token'].includes(key))) {
+  if (!columns.length) return '\uFEFF';
   const quote = value => '"' + String(value ?? '').replace(/^[=+@\-\t\r]/, "'$&").replaceAll('"', '""') + '"';
   return '\uFEFF' + [columns.map(quote).join(','), ...rows.map(row => columns.map(key => quote(row[key])).join(','))].join('\r\n');
 }
@@ -230,6 +229,12 @@ async function api(request, env, store, url) {
   if (path === '/api/tickets' && method === 'GET') return json(await store.listTickets({ ...pagination(url), eventId: url.searchParams.get('eventId') || undefined }));
   if (path === '/api/users' && method === 'GET') return json(await store.listUsers({ ...pagination(url), search: url.searchParams.get('search') || '', audienceKey: url.searchParams.get('audienceKey') || '' }));
   if (path === '/api/export/users' && method === 'GET') return download(csv(await allPages(opts => store.listUsers(opts))), 'users.csv', 'text/csv;charset=utf-8');
+  if (path === '/api/export/confirmed-participants' && method === 'GET') {
+    const audienceKey = url.searchParams.get('audienceKey') || '';
+    if (audienceKey && !await store.getAudienceEvent(audienceKey)) fail('رویداد پیدا نشد', 404);
+    const rows = await allPages(opts => store.listUsers({ ...opts, audienceKey, confirmedOnly: true }));
+    return download(csv(rows, ['id', 'first_name', 'last_name', 'username', 'phone']), 'confirmed-participants.csv', 'text/csv;charset=utf-8');
+  }
   if (path === '/api/export/tickets' && method === 'GET') {
     const tickets = await allPages(opts => store.listTickets({ ...opts, eventId: url.searchParams.get('eventId') || undefined }));
     const rows = tickets.map(({ id, token, ...ticket }) => ({ checkin_code: shortTicketCode(ticket.checkin_code), ...ticket }));
