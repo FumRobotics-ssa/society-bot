@@ -1,5 +1,5 @@
 import { createLoginCode } from './auth.js';
-import { neshanUrl } from './store.js';
+import { neshanUrl, SUPPORT_CONTACT } from './store.js';
 import { configuredStudentNumberLength, isFumStudent, isValidStudentNumber, normalizeStudentNumber, pricingGroupLabel } from './pricing.js';
 import { formatEventSchedule } from '../public/jalali.js';
 
@@ -483,7 +483,7 @@ export async function handleUpdate(update, env, store) {
           const document = message.document;
           if (!photo && (!document || !['image/jpeg', 'image/png', 'image/webp', 'application/pdf'].includes(document.mime_type))) return send('📎 رسید را به‌صورت عکس یا فایل PDF بفرستید.');
           if ((photo?.file_size || document?.file_size || 0) > 10 * 1024 * 1024) return send('حجم فایل بیشتر از ۱۰ مگابایت است. نسخهٔ کم‌حجم‌تری از رسید بفرستید.');
-          if (!env.VERIFICATION_CHAT) return send('ℹ️ بررسی پرداخت فعلاً در دسترس نیست. با برگزارکنندهٔ رویداد تماس بگیرید.');
+          if (!env.VERIFICATION_CHAT) return send(`ℹ️ بررسی پرداخت فعلاً در دسترس نیست.\n\n${SUPPORT_CONTACT}`);
           const receiptType = photo ? 'photo' : 'document';
           const order = await store.submitReceipt(data.order_id, from.id, photo?.file_id || document.file_id, receiptType, `${updateKey}:receipt`);
           const previousTickets = await store.countApprovedTickets(from.id, order.event_id);

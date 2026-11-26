@@ -196,6 +196,7 @@ test('expiry queues one notice for a paid reservation that ran out of time befor
   assert.equal(job.dedupe_key, `receipt-expired:${late.id}`);
   assert.equal(payload.chat_id, 1);
   assert.match(payload.text, /مهلت ارسال رسید برای «تئاتر» تمام شد/);
+  assert.match(payload.text, /پشتیبانی انجمن رباتیک دانشگاه فردوسی مشهد @FUMrs_admin پیام بدهید/);
 });
 
 test('receipt belongs to purchaser and duplicate submission does not extend its deadline', async t => {
