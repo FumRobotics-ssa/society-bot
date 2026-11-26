@@ -213,10 +213,20 @@ test('short event signup requests a student number only for the Ferdowsi tariff'
     await contact(id);
     assert.equal((await f.store.getState(id)).step, 'choose_event_tariff');
   }
-  await f.click('tariff:n:' + event.id);
+  await f.click('tariff:y:' + event.id);
+  const numberPrompt = JSON.parse((await f.store.one("SELECT payload FROM outbox WHERE method='sendMessage' AND payload LIKE '%دانشجوی فردوسی نیستم%'")).payload);
+  assert.equal(numberPrompt.text, '🎓 شمارهٔ دانشجویی فردوسی را بفرستید.');
+  const notFum = numberPrompt.reply_markup.inline_keyboard[0][0];
+  assert.equal(notFum.text, 'دانشجوی فردوسی نیستم');
+  await f.click(notFum.callback_data);
   assert.equal((await f.store.getState(1)).step, 'reserve_quantity');
+  assert.equal((await f.store.getUser(1)).profile.is_fum_student, false);
   assert.equal((await f.store.getUser(1)).profile.student_number, undefined);
   assert.equal((await f.store.quoteOrder(1, event.id, 1)).unit_price, 60000);
+  await f.send('1');
+  const quoteState = await f.store.getState(1);
+  await f.click(notFum.callback_data);
+  assert.deepEqual(await f.store.getState(1), quoteState);
   await click(2, 'tariff:y:' + event.id);
   assert.equal((await f.store.getState(2)).step, 'fum_student_number');
   await send(2, '۱۲۳');
@@ -237,8 +247,19 @@ test('complete signup persists the full name and rejects another persons contact
   await handleUpdate(f.message('', { contact: { user_id: 2, phone_number: '09123456789' } }), f.env, f.store);
   assert.equal((await f.store.getState(1)).step, 'signup:phone');
   await handleUpdate(f.message('', { contact: { user_id: 1, phone_number: '09123456789' } }), f.env, f.store);
-  await f.click('s:boy'); await f.click('s:no'); await f.click('s:no'); await f.click('s:no'); await f.click('s:no'); await f.click('s:yes');
-  const user = await f.store.getUser(1); assert.equal(user.full_name, 'علی محمدی'); assert.equal(user.phone, '09123456789'); assert.equal(user.profile.is_student, false); f.db.close();
+  await f.click('s:boy');
+  await f.click('s:yes');
+  const numberPrompt = JSON.parse((await f.store.one("SELECT payload FROM outbox WHERE method='sendMessage' AND payload LIKE '%دانشجوی فردوسی نیستم%'")).payload);
+  await f.click(numberPrompt.reply_markup.inline_keyboard[0][0].callback_data);
+  assert.equal((await f.store.getState(1)).step, 'signup:is_student');
+  await f.click('s:no'); await f.click('s:no'); await f.click('s:no'); await f.click('s:yes');
+  const user = await f.store.getUser(1);
+  assert.equal(user.full_name, 'علی محمدی');
+  assert.equal(user.phone, '09123456789');
+  assert.equal(user.profile.is_fum_student, false);
+  assert.equal(user.profile.is_student, false);
+  assert.equal(user.profile.university_name, undefined);
+  f.db.close();
 });
 test('a signup previously awaiting a surname can finish without restarting', async t => {
   const f = setup();
@@ -348,8 +369,9 @@ test('/complete_student_info lets an older FUM profile enter a 10-digit number',
   assert.equal(user.profile.student_number, '0012345678');
   assert.equal((await f.store.getState(1)).step, 'idle');
   const replies = (await f.db.prepare("SELECT payload FROM outbox WHERE method='sendMessage'").all()).results.map(row => JSON.parse(row.payload).text);
-  assert.ok(replies.some(text => text.includes('۱۰ رقمی')));
-  assert.ok(replies.some(text => text.includes('استعلام نمی‌شود')));
+  assert.equal(replies[0], '🎓 شمارهٔ دانشجویی فردوسی را بفرستید.');
+  assert.ok(replies.some(text => text.includes('۱۰ رقم')));
+  assert.ok(!replies.some(text => text.includes('استعلام نمی‌شود')));
   f.db.close();
 });
 
