@@ -222,7 +222,12 @@ test('short event signup requests a student number only for the Ferdowsi tariff'
   assert.equal((await f.store.getState(2)).step, 'fum_student_number');
   await send(2, '۱۲۳');
   assert.equal((await f.store.getState(2)).step, 'fum_student_number');
-  await send(2, '۰۱۲۳۴۵۶۷۸۹');
+  const studentNumber = f.message('۰۱۲۳۴۵۶۷۸۹', { from: { id: 2 }, chat: { id: 2, type: 'private' } });
+  await handleUpdate(studentNumber, f.env, f.store);
+  const studentReplies = (await f.store.all("SELECT payload FROM outbox WHERE dedupe_key LIKE ? AND method='sendMessage'", `update:${studentNumber.update_id}:%`))
+    .map(row => JSON.parse(row.payload).text);
+  assert.ok(studentReplies.some(text => text.includes('شمارهٔ دانشجویی در حساب شما ذخیره شد')));
+  assert.ok(studentReplies.some(text => text.includes('تعداد بلیت مورد نظر را وارد کنید')));
   assert.equal((await f.store.getState(2)).step, 'reserve_quantity');
   assert.equal((await f.store.getUser(2)).profile.student_number, '0123456789');
   assert.equal((await f.store.quoteOrder(2, event.id, 1)).unit_price, 25000);
@@ -235,6 +240,20 @@ test('complete signup persists profile and rejects another persons contact', asy
   await handleUpdate(f.message('', { contact: { user_id: 1, phone_number: '09123456789' } }), f.env, f.store);
   await f.click('s:boy'); await f.click('s:no'); await f.click('s:no'); await f.click('s:no'); await f.click('s:no'); await f.click('s:yes');
   const user = await f.store.getUser(1); assert.equal(user.first_name, 'علی'); assert.equal(user.phone, '09123456789'); assert.equal(user.profile.is_student, false); f.db.close();
+});
+test('a confirmation opened before the registration cutoff cannot reserve after it', async t => {
+  const f = setup();
+  t.after(() => f.db.close());
+  await f.store.upsertUser({ id: 1, phone: '09123456789' });
+  const event = await f.store.saveEvent({ name: 'کارگاه', capacity: 3 });
+  await f.send('/start getTicket_' + event.id);
+  await f.send('1');
+  const quote = JSON.parse((await f.store.getState(1)).data_json);
+  await f.store.saveEvent({ registration_closes_at: 1 }, event.id);
+  await f.click('rq:y:' + quote.quote_nonce);
+  assert.equal((await f.store.getState(1)).step, 'idle');
+  assert.equal((await f.store.listOrders()).length, 0);
+  assert.ok(await f.store.one("SELECT 1 FROM outbox WHERE method='sendMessage' AND payload LIKE '%ثبت‌نام آن متوقف شده است%'"));
 });
 test('free reservation auto-issues a ticket without requesting a receipt', async () => {
   const f = setup(); f.env.VERIFICATION_CHAT = ''; f.env.PUBLIC_URL = 'https://robotics-society.fum-robotics-ssa.workers.dev';
