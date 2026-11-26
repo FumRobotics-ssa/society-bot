@@ -396,6 +396,32 @@ test('sender ordering blocks later updates during retry backoff but permits othe
   assert.equal((await db.prepare('SELECT status FROM inbox WHERE update_id=3').first()).status, 'done'); db.close();
 });
 
+test('inbox claims the first eligible active update and recovers an expired lease in order', async t => {
+  const { db, env } = fixture();
+  t.after(() => db.close());
+  await db.prepare(`WITH RECURSIVE ids(id) AS (VALUES(1) UNION ALL SELECT id+1 FROM ids WHERE id<1000)
+    INSERT INTO inbox(update_id,stream_key,status,payload) SELECT id,'2','done','{}' FROM ids`).run();
+  for (const [update_id, id] of [[1001, 2], [1002, 2], [1003, 3], [1004, 4], [1005, 5]]) {
+    await receiveUpdate(env, { update_id, message: { from: { id } } });
+  }
+  await db.prepare("UPDATE inbox SET status='processing',lease_until=unixepoch()+300 WHERE update_id=1001").run();
+  await db.prepare("UPDATE inbox SET status='failed' WHERE update_id=1003").run();
+  await processInbox(env);
+  const status = id => db.prepare('SELECT status FROM inbox WHERE update_id=?').bind(id).first('status');
+  assert.equal(await status(1001), 'processing');
+  assert.equal(await status(1002), 'new');
+  assert.equal(await status(1003), 'failed');
+  assert.equal(await status(1004), 'done');
+  assert.equal(await status(1005), 'new');
+  await db.prepare('UPDATE inbox SET lease_until=unixepoch()-1 WHERE update_id=1001').run();
+  await processInbox(env);
+  assert.equal(await status(1001), 'done');
+  assert.equal(await status(1002), 'new');
+  await processInbox(env);
+  assert.equal(await status(1002), 'done');
+  assert.equal(await status(1005), 'new');
+});
+
 test('login issues the Robotics Society session cookie and it authenticates requests', async () => {
   const { db, env, request } = fixture();
   const code = await createLoginCode(db, 99);
