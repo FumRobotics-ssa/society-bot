@@ -1,5 +1,5 @@
 import { createLoginCode } from './auth.js';
-import { neshanUrl, SUPPORT_CONTACT, SUPPORT_STATUSES } from './store.js';
+import { displayName, neshanUrl, SUPPORT_CONTACT, SUPPORT_STATUSES } from './store.js';
 import { configuredStudentNumberLength, isFumStudent, isValidStudentNumber, normalizeStudentNumber, pricingGroupLabel } from './pricing.js';
 import { formatEventSchedule } from '../public/jalali.js';
 
@@ -8,6 +8,9 @@ const AR_DIGITS = '٠١٢٣٤٥٦٧٨٩';
 const STATUS = { reserved: 'در انتظار رسید', pending: 'در انتظار بررسی', approved: 'تأیید شده', rejected: 'رد شده', cancelled: 'لغو شده', expired: 'مهلت گذشته' };
 const FACULTIES = ['ادبیات و علوم انسانی', 'الهیات و معارف اسلامی', 'حقوق و علوم سیاسی', 'دامپزشکی', 'علوم', 'علوم اداری و اقتصادی', 'علوم تربیتی و روانشناسی', 'علوم ریاضی', 'علوم ورزشی', 'کشاورزی', 'معماری و شهرسازی', 'منابع طبیعی و محیط زیست', 'مهندسی', 'هنر نیشابور'];
 const YES_NO = [[{ text: 'بله', callback_data: 's:yes' }, { text: 'خیر', callback_data: 's:no' }]];
+const FULL_NAME_PROMPT = 'نام و نام خانوادگی‌تان را با فاصله در یک پیام بفرستید.\nمثال: سارا احمدی';
+const PHONE_PROMPT = '📱 شمارهٔ تماس\n\nبرای فرستادن شمارهٔ همین حساب تلگرام، «ارسال شماره من» را بزنید.';
+const PHONE_KEYBOARD = { keyboard: [[{ text: 'ارسال شماره من', request_contact: true }]], resize_keyboard: true, one_time_keyboard: true };
 const MENU = { keyboard: [[{ text: 'رویدادها' }, { text: 'بلیت‌های من' }], [{ text: 'حساب من' }, { text: 'راهنما' }], [{ text: 'تیکت‌های من' }]], resize_keyboard: true };
 const EVENT_LINK_PREFIX = 'getTicket_';
 const EVENT_LINK_PAGE_SIZE = 20;
@@ -85,7 +88,7 @@ function stateData(state) {
 }
 function userText(user) {
   const p = profileOf(user);
-  const contact = [`شناسه: ${user.id}`, `نام و نام خانوادگی: ${[user.first_name, user.last_name].filter(Boolean).join(' ') || 'ثبت نشده'}`, `تلفن: ${user.phone || 'ثبت نشده'}`];
+  const contact = [`شناسه: ${user.id}`, `نام و نام خانوادگی: ${displayName(user) || 'ثبت نشده'}`, `تلفن: ${user.phone || 'ثبت نشده'}`];
   const education = [];
   for (const [key, title] of [['is_fum_student', 'دانشجوی دانشگاه فردوسی مشهد؟'], ['is_student', 'دانشجو هستید؟'], ['is_mashhad_student', 'در دانشگاهی در مشهد تحصیل می‌کنید؟'], ['is_graduate_student', 'فارغ‌التحصیل هستید؟'], ['is_student_relative', 'عضو خانواده دانشجویان یا کارکنان فردوسی هستید؟'], ['university_name', 'دانشگاه'], ['student_number', 'شماره دانشجویی'], ['fum_faculty', 'دانشکده'], ['entrance_year', 'سال ورود'], ['is_mast_phd', 'دانشجوی کارشناسی ارشد یا دکتری هستید؟'], ['student_major', 'رشته']]) {
     if (p[key] !== undefined && p[key] !== '' && !(p.is_fum_student && ['is_student', 'is_mashhad_student', 'is_graduate_student', 'is_student_relative', 'university_name'].includes(key))) education.push(`${title}${key.startsWith('is_') ? '' : ':'} ${typeof p[key] === 'boolean' || typeof p[key] === 'number' && key.startsWith('is_') ? p[key] ? 'بله' : 'خیر' : p[key]}`);
@@ -330,9 +333,9 @@ export async function handleUpdate(update, env, store) {
     if (offset) keyboard.push([{ text: 'پیام‌های تازه‌تر', callback_data: `sp:v:${ticket.id}:${Math.max(0, offset - 3)}` }]);
     await send(paragraphs(`💬 تیکت #${ticket.id} · ${ticket.event_name}\nوضعیت: ${SUPPORT_STATUSES[ticket.status]}`, ...history), { inline_keyboard: keyboard });
   };
-  const startSignup = (eventId = null) => transition('signup:first_name', {
+  const startSignup = (eventId = null) => transition('signup:full_name', {
     profile: {}, username: from.username || '', ...(eventId ? { registration_event_id: eventId, quick_signup: true } : {}),
-  }, paragraphs('👤 ساخت حساب کاربری', eventId && 'پس از ساخت حساب، ثبت‌نام همین رویداد را ادامه می‌دهید.', 'نام خود را وارد کنید.'));
+  }, paragraphs('👤 ساخت حساب کاربری', eventId && 'پس از ساخت حساب، ثبت‌نام همین رویداد را ادامه می‌دهید.', FULL_NAME_PROMPT));
   const promptFumStudentNumber = async (eventId = null, chooseStudentTariff = false) => transition('fum_student_number',
     { event_id: eventId ? Number(eventId) : null, choose_student_tariff: chooseStudentTariff },
     paragraphs(studentNumberPrompt(configuredStudentNumberLength(env.FUM_STUDENT_NUMBER_LENGTH)),
@@ -599,7 +602,7 @@ export async function handleUpdate(update, env, store) {
           const receiptCaption = paragraphs('🧾 رسید در انتظار بررسی', [
             `کد سفارش: ${order.id}`,
             `شناسه کاربر: ${order.user_id}`,
-            `نام و نام خانوادگی: ${[order.first_name, order.last_name].filter(Boolean).join(' ') || 'ثبت نشده'}`,
+            `نام و نام خانوادگی: ${displayName(order) || 'ثبت نشده'}`,
           ].join('\n'), [
             `نام رویداد: ${order.event_name || 'نامشخص'}`,
             order.place_name ? `مکان: ${String(order.place_name).slice(0, 120)}` : '',
@@ -729,14 +732,14 @@ export async function handleUpdate(update, env, store) {
       const status = ticket.status || ticket.order_status;
       return send(paragraphs(
         `🎫 بلیت «${ticket.event_name || ticket.event_id || ''}»`,
-        `کد پذیرش: ${shortTicketCode(ticket.checkin_code)}\nصاحب بلیت: ${[ticket.first_name, ticket.last_name].filter(Boolean).join(' ')}`,
+        `کد پذیرش: ${shortTicketCode(ticket.checkin_code)}\nصاحب بلیت: ${displayName(ticket)}`,
         `وضعیت بلیت: ${STATUS[status] || status || ''}\nورود: ${ticket.checked_in_at ? 'ثبت شده' : 'ثبت نشده'}`,
       ));
     }
     if (command === 'attend_ticket') {
       const ticket = await store.checkIn(arg, from.id);
       const status = ticket.already_checked_in ? 'ورود این بلیت قبلاً ثبت شده است.' : '✅ ورود ثبت شد.';
-      const attendee = [ticket.first_name, ticket.last_name].filter(Boolean).join(' ');
+      const attendee = displayName(ticket);
       return send(paragraphs(status, [ticket.event_name, attendee].filter(Boolean).join('\n')));
     }
     if (!isAdmin) return send('🔒 این بخش فقط برای مدیران رویداد در دسترس است.');
@@ -820,14 +823,14 @@ export async function handleUpdate(update, env, store) {
     }
     if (command === 'export_users') {
       const users = await collectPages(opts => store.listUsers(opts));
-      await store.enqueue('sendDocument', { chat_id: chat.id, filename: 'users.csv', _documentText: csv(users, [['id', 'شناسه'], ['first_name', 'نام'], ['last_name', 'نام خانوادگی'], ['phone', 'شماره'], [u => JSON.stringify(profileOf(u)), 'اطلاعات تحصیلی']]) }, `${updateKey}:csv`);
+      await store.enqueue('sendDocument', { chat_id: chat.id, filename: 'users.csv', _documentText: csv(users, [['id', 'شناسه'], ['first_name', 'نام'], ['last_name', 'نام خانوادگی'], ['phone', 'شماره'], [u => JSON.stringify(profileOf(u)), 'اطلاعات تحصیلی'], [displayName, 'نام کامل']]) }, `${updateKey}:csv`);
       return send(`📎 فایل ${money(users.length)} کاربر آماده است.\nهر فایل حداکثر هزار ردیف دارد.`, undefined, 'export_info');
     }
     if (['export_tickets', 'preview_tickets'].includes(command)) {
       const eventId = positive(arg);
       const tickets = await collectPages(opts => store.listTickets({ ...opts, eventId }));
-      if (command === 'preview_tickets') return send(tickets.length ? paragraphs('🎫 پیش‌نمایش بلیت‌ها', tickets.slice(0, 50).map(t => `${shortTicketCode(t.checkin_code)} · ${t.first_name || ''} ${t.last_name || ''} · ${t.checked_in_at ? 'ورود ثبت شده' : 'ورود ثبت نشده'}`).join('\n')) : 'بلیت پیدا نشد.');
-      await store.enqueue('sendDocument', { chat_id: chat.id, filename: `tickets-${eventId}.csv`, _documentText: csv(tickets, [[t => shortTicketCode(t.checkin_code), 'کد پذیرش'], ['legacy_code', 'کد قدیمی'], ['event_name', 'رویداد'], ['first_name', 'نام'], ['last_name', 'نام خانوادگی'], ['user_id', 'شناسه کاربر'], ['order_status', 'وضعیت سفارش'], ['checked_in_at', 'زمان ورود']]) }, `${updateKey}:csv`);
+      if (command === 'preview_tickets') return send(tickets.length ? paragraphs('🎫 پیش‌نمایش بلیت‌ها', tickets.slice(0, 50).map(t => `${shortTicketCode(t.checkin_code)} · ${displayName(t)} · ${t.checked_in_at ? 'ورود ثبت شده' : 'ورود ثبت نشده'}`).join('\n')) : 'بلیت پیدا نشد.');
+      await store.enqueue('sendDocument', { chat_id: chat.id, filename: `tickets-${eventId}.csv`, _documentText: csv(tickets, [[t => shortTicketCode(t.checkin_code), 'کد پذیرش'], ['legacy_code', 'کد قدیمی'], ['event_name', 'رویداد'], ['first_name', 'نام'], ['last_name', 'نام خانوادگی'], ['user_id', 'شناسه کاربر'], ['order_status', 'وضعیت سفارش'], ['checked_in_at', 'زمان ورود'], [displayName, 'نام کامل']]) }, `${updateKey}:csv`);
       return send(`📎 فایل ${money(tickets.length)} بلیت آماده است.\nهر فایل حداکثر هزار ردیف دارد.`, undefined, 'export_info');
     }
     if (command === 'print_tickets') return send('🖨 چاپ بلیت‌ها\n\nبا /admin وارد پنل شوید و در بخش بلیت‌های رویداد، «چاپ» را انتخاب کنید.');
@@ -907,7 +910,10 @@ export async function handleUpdate(update, env, store) {
     ), { inline_keyboard: YES_NO });
     const saveAccount = async () => {
       if (d.quick_signup) p.short_registration = true;
-      await store.upsertUser({ id: from.id, username: from.username || d.username, first_name: d.first_name, last_name: d.last_name, phone: d.phone, profile: p });
+      const names = d.full_name
+        ? { full_name: d.full_name, first_name: '', last_name: '' }
+        : { first_name: d.first_name, last_name: d.last_name };
+      await store.upsertUser({ id: from.id, username: from.username || d.username, ...names, phone: d.phone, profile: p });
       if (d.registration_event_id) {
         await send('✅ حساب شما ساخته شد. حالا می‌توانید ثبت‌نام رویداد را ادامه دهید.', MENU, 'signup_complete');
         return selectEvent(d.registration_event_id, { afterSignup: true });
@@ -915,6 +921,14 @@ export async function handleUpdate(update, env, store) {
       await send('✅ حساب شما آماده است.\n\nبرای دیدن برنامه‌ها، «رویدادها» را بزنید.', MENU);
       return store.setState(from.id, 'idle', { last_update_id: update.update_id });
     };
+    if (step === 'full_name') {
+      const fullName = isCallback ? '' : String(input || '').trim().replace(/\s+/gu, ' ');
+      if (fullName.length > 160 || /\p{Cc}/u.test(fullName) || !/\p{L}.* \S*\p{L}/u.test(fullName)) {
+        throw new Error(FULL_NAME_PROMPT);
+      }
+      d.full_name = fullName;
+      return next('phone', PHONE_PROMPT, PHONE_KEYBOARD);
+    }
     if (step === 'first_name') {
       if (isCallback) throw new Error('نام خود را در یک پیام متنی بفرستید.');
       d.first_name = name(input);
@@ -923,7 +937,7 @@ export async function handleUpdate(update, env, store) {
     if (step === 'last_name') {
       if (isCallback) throw new Error('نام خانوادگی را در یک پیام متنی بفرستید.');
       d.last_name = name(input);
-      return next('phone', '📱 شمارهٔ تماس\n\nبرای فرستادن شمارهٔ همین حساب تلگرام، «ارسال شماره من» را بزنید.', { keyboard: [[{ text: 'ارسال شماره من', request_contact: true }]], resize_keyboard: true, one_time_keyboard: true });
+      return next('phone', PHONE_PROMPT, PHONE_KEYBOARD);
     }
     if (step === 'phone') {
       if (isCallback || !message?.contact || message.contact.user_id !== from.id) throw new Error('برای فرستادن شمارهٔ همین حساب تلگرام، «ارسال شماره من» را بزنید.');

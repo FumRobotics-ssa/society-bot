@@ -49,7 +49,7 @@ function ticketHTML(ticket, env, print = false) {
       <div class="ticket-section ticket-status ${statusClass}"><span class="ticket-label">وضعیت ورود</span><strong>${status}</strong></div>
       <div class="ticket-section ticket-qr"><span class="ticket-label">اسکن بلیت</span><img src="/ticket/${ticket.token}/qr.svg" alt="کد QR بلیت" width="240" height="240"></div>
       <div class="ticket-section ticket-code"><span class="ticket-label">کد پذیرش</span><strong dir="ltr">${esc(shortTicketCode(ticket.checkin_code))}</strong></div>
-      ${print ? `<p class="ticket-holder">${esc(ticket.first_name)} ${esc(ticket.last_name)}</p>` : ''}
+      ${print ? `<p class="ticket-holder">${esc(ticket.full_name)}</p>` : ''}
       <p class="ticket-help">برای ثبت ورود، کد را به مسئول پذیرش نشان دهید</p>
     </div>`;
   if (!print && ticket.poster_url) {
@@ -129,7 +129,7 @@ async function api(request, env, store, url) {
     let { token } = await body(request); token = String(token || '').trim();
     if (token.includes('/ticket/')) token = token.split('/ticket/').at(-1).split(/[?#]/)[0];
     const ticket = await store.checkIn(token, session.user_id);
-    return json({ id: ticket.id, code: shortTicketCode(ticket.checkin_code), event_name: ticket.event_name, first_name: ticket.first_name, last_name: ticket.last_name, checked_in_at: ticket.checked_in_at, already_checked_in: ticket.already_checked_in });
+    return json({ id: ticket.id, code: shortTicketCode(ticket.checkin_code), event_name: ticket.event_name, first_name: ticket.first_name, last_name: ticket.last_name, full_name: ticket.full_name, checked_in_at: ticket.checked_in_at, already_checked_in: ticket.already_checked_in });
   }
   if (session.role === 'checkin') fail('دسترسی شما فقط برای ثبت ورود است', 403);
   if (path === '/api/stats' && method === 'GET') {
@@ -233,7 +233,7 @@ async function api(request, env, store, url) {
     const audienceKey = url.searchParams.get('audienceKey') || '';
     if (audienceKey && !await store.getAudienceEvent(audienceKey)) fail('رویداد پیدا نشد', 404);
     const rows = await allPages(opts => store.listUsers({ ...opts, audienceKey, confirmedOnly: true }));
-    return download(csv(rows, ['id', 'first_name', 'last_name', 'username', 'phone']), 'confirmed-participants.csv', 'text/csv;charset=utf-8');
+    return download(csv(rows, ['id', 'first_name', 'last_name', 'username', 'phone', 'full_name']), 'confirmed-participants.csv', 'text/csv;charset=utf-8');
   }
   if (path === '/api/export/tickets' && method === 'GET') {
     const tickets = await allPages(opts => store.listTickets({ ...opts, eventId: url.searchParams.get('eventId') || undefined }));
