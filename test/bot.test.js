@@ -103,10 +103,9 @@ test('event details show the optional end time and reserve the id and remaining 
   const participantReplies = replies.filter(reply => reply.chat_id === 1);
   assert.equal(participantReplies.length, 2);
   const details = participantReplies.find(reply => reply.text?.includes(event.name)).text;
-  assert.match(details, /زمان شروع:[^\n]*۱۴:۰۰/);
-  assert.match(details, /زمان پایان:[^\n]*۱۶:۰۰/);
+  assert.match(details, /^🕒 ۱۲ آذر ۱۴۰۵، از ساعت ۱۴ تا ۱۶$/m);
   const caption = participantReplies.find(reply => reply.caption?.includes(withPoster.name)).caption;
-  assert.doesNotMatch(caption, /زمان پایان/);
+  assert.match(caption, /^🕒 زمان برگزاری اعلام نشده$/m);
   for (const reply of participantReplies) {
     assert.doesNotMatch(reply.text || reply.caption, /ظرفیت باقی‌مانده|شناسه:/);
   }
