@@ -1,6 +1,11 @@
 import { configuredStudentNumberLength, normalizeDigits, resolveEventPricing } from './pricing.js';
 
 export const SUPPORT_CONTACT = 'به اکانت پشتیبانی انجمن رباتیک دانشگاه فردوسی مشهد @FUMrs_admin پیام بدهید.';
+export const SUPPORT_STATUSES = { new: 'جدید', in_review: 'در حال بررسی', waiting_user: 'منتظر پاسخ شما', closed: 'بسته' };
+const SUPPORT_TICKET = `SELECT s.*, o.user_id, o.status AS order_status, o.quantity, o.unit_price,
+  e.name AS event_name, u.first_name, u.last_name
+  FROM support_tickets s JOIN orders o ON o.id=s.order_id JOIN events e ON e.id=o.event_id
+  JOIN users u ON u.id=o.user_id`;
 
 const OCCUPIED = "(status='approved' OR (status IN ('reserved','pending') AND expires_at>unixepoch()))";
 const QUESTIONS_OPEN = 'e.archived=0 AND s.enabled=1 AND s.closes_at>unixepoch()';
@@ -571,10 +576,12 @@ export class Store {
   }
   async expireOrders() {
     const cutoff = Math.floor(Date.now() / 1000);
-    const notice = `⏳ مهلت ارسال رسید برای «%s» تمام شد و جای رزروشده آزاد شد.\n\nاگر مبلغ را واریز کرده‌اید، برای پیگیری ${SUPPORT_CONTACT}\n\nاگر هنوز پرداخت نکرده‌اید، می‌توانید از «رویدادها» دوباره برای ثبت‌نام اقدام کنید.`;
+    const notice = `⏳ مهلت ارسال رسید برای «%s» تمام شد و جای رزروشده آزاد شد.\n\nاگر مبلغ را واریز کرده‌اید، «پیگیری پرداخت» را بزنید. در صورت اختلال ربات، ${SUPPORT_CONTACT}\n\nاگر هنوز پرداخت نکرده‌اید، می‌توانید از «رویدادها» دوباره برای ثبت‌نام اقدام کنید.`;
     const [, expired] = await this.db.batch([
       this.stmt(`INSERT INTO outbox(id,method,payload,dedupe_key)
-        SELECT 'receipt-expired:' || o.id,'sendMessage',json_object('chat_id',o.user_id,'text',printf(?,e.name)),
+        SELECT 'receipt-expired:' || o.id,'sendMessage',json_object('chat_id',o.user_id,'text',printf(?,e.name),
+          'reply_markup',json_object('inline_keyboard',json_array(json_array(
+            json_object('text','پیگیری پرداخت','callback_data','sp:o:' || o.id))))),
           'receipt-expired:' || o.id
         FROM orders o JOIN users u ON u.id=o.user_id JOIN events e ON e.id=o.event_id
         WHERE o.status='reserved' AND o.expires_at<=? AND u.is_deleted=0
@@ -583,6 +590,98 @@ export class Store {
         WHERE status IN ('reserved','pending') AND expires_at<=?`, cutoff),
     ]);
     return { expired: expired.meta.changes };
+  }
+  async getSupportOrder(orderId, userId) {
+    return this.one(`SELECT o.id,e.name AS event_name,s.id AS ticket_id FROM orders o
+      JOIN events e ON e.id=o.event_id JOIN users u ON u.id=o.user_id AND u.is_deleted=0
+      LEFT JOIN support_tickets s ON s.order_id=o.id
+      WHERE o.id=? AND o.user_id=? AND o.unit_price>0 AND (o.status='expired' OR s.id IS NOT NULL)`,
+      String(orderId), int(userId, 'شناسه کاربر'));
+  }
+  async getSupportTicket(ticketId, userId = null) {
+    const own = userId != null ? 'AND o.user_id=? AND u.is_deleted=0' : '';
+    return this.one(`${SUPPORT_TICKET} WHERE s.id=? ${own}`, int(ticketId, 'شماره تیکت'),
+      ...(userId != null ? [int(userId, 'شناسه کاربر')] : []));
+  }
+  async listSupportTickets({ userId = null, status = '', limit = 25, offset = 0 } = {}) {
+    const where = [], args = [];
+    if (userId != null) { where.push('o.user_id=? AND u.is_deleted=0'); args.push(int(userId, 'شناسه کاربر')); }
+    if (Object.hasOwn(SUPPORT_STATUSES, status)) { where.push('s.status=?'); args.push(status); }
+    return this.all(`${SUPPORT_TICKET} ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+      ORDER BY s.updated_at DESC,s.id DESC LIMIT ? OFFSET ?`, ...args, ...paging(limit, offset));
+  }
+  async listSupportMessages(ticketId, { limit = 25, offset = 0 } = {}) {
+    return this.all(`SELECT id,sender,text,file_id<>'' AS has_file,created_at
+      FROM support_messages WHERE ticket_id=? ORDER BY id DESC LIMIT ? OFFSET ?`,
+      int(ticketId, 'شماره تیکت'), ...paging(limit, offset));
+  }
+  async getSupportAttachment(ticketId, messageId) {
+    return this.one('SELECT file_id FROM support_messages WHERE ticket_id=? AND id=?',
+      int(ticketId, 'شماره تیکت'), int(messageId, 'شناسه پیام'));
+  }
+  async submitSupportMessage(orderId, userId, { text, fileId, requestKey }) {
+    const id = String(orderId), actor = int(userId, 'شناسه کاربر');
+    const message = string(text, 'متن تیکت', 1000), file = string(fileId, 'پیوست تیکت', 1000);
+    const key = string(requestKey, 'شناسه درخواست', 200, true);
+    if (!message && !file) throw domainError('INVALID_INPUT', 'توضیح یا فایل رسید را بفرستید');
+    await this.db.batch([
+      this.stmt(`INSERT INTO support_tickets(order_id)
+        SELECT o.id FROM orders o JOIN users u ON u.id=o.user_id AND u.is_deleted=0
+        WHERE o.id=? AND o.user_id=? AND o.unit_price>0 AND o.status='expired'
+        ON CONFLICT(order_id) DO NOTHING`, id, actor),
+      this.stmt(`INSERT INTO support_messages(ticket_id,sender,actor_id,request_key,text,file_id)
+        SELECT s.id,'user',o.user_id,?,?,? FROM support_tickets s
+        JOIN orders o ON o.id=s.order_id JOIN users u ON u.id=o.user_id AND u.is_deleted=0
+        WHERE s.order_id=? AND o.user_id=?
+        ON CONFLICT(request_key) DO NOTHING`, key, message, file, id, actor),
+      this.stmt(`UPDATE support_tickets SET status=CASE
+        WHEN status IN ('waiting_user','closed') THEN CASE WHEN assigned_to IS NULL THEN 'new' ELSE 'in_review' END
+        ELSE status END, updated_at=unixepoch()
+        WHERE order_id=? AND changes()>0`, id),
+    ]);
+    const result = await this.one(`SELECT m.ticket_id AS id FROM support_messages m JOIN support_tickets s ON s.id=m.ticket_id
+      WHERE m.request_key=? AND m.sender='user' AND m.actor_id=? AND s.order_id=?`, key, actor, id);
+    if (!result) throw domainError('NOT_FOUND', 'سفارش برای پیگیری در دسترس نیست');
+    return result.id;
+  }
+  async changeSupportTicket(ticketId, actorId, action, isOwner = false) {
+    const id = int(ticketId, 'شماره تیکت'), actor = int(actorId, 'شناسه مدیر');
+    const actions = {
+      claim: [`assigned_to=?,status=CASE WHEN status='new' THEN 'in_review' ELSE status END`,
+        '(assigned_to IS NULL OR assigned_to=?)', [actor], [actor]],
+      release: ['assigned_to=NULL', '(assigned_to=? OR ?=1)', [], [actor, Number(isOwner)]],
+      close: ["status='closed'", 'assigned_to=?', [], [actor]],
+    };
+    if (!Object.hasOwn(actions, action)) throw domainError('INVALID_INPUT', 'عملیات تیکت معتبر نیست');
+    const [update, guard, values, conditions] = actions[action];
+    const updated = await this.one(`UPDATE support_tickets SET ${update},updated_at=unixepoch()
+      WHERE id=? AND status<>'closed' AND ${guard} RETURNING id`, ...values, id, ...conditions);
+    if (!updated) throw domainError('SUPPORT_UNAVAILABLE', 'تیکت بسته است یا در اختیار مدیر دیگری است');
+    await this.audit(actor, `support.${action}`, id);
+  }
+  async replyToSupportTicket(ticketId, actorId, { text, requestKey, waitForUser }) {
+    const id = int(ticketId, 'شماره تیکت'), actor = int(actorId, 'شناسه مدیر');
+    const message = string(text, 'متن پاسخ', 1000, true);
+    if (!/^[a-f0-9-]{36}$/.test(String(requestKey || ''))) throw domainError('INVALID_INPUT', 'شناسه پاسخ معتبر نیست');
+    const key = `support-reply:${actor}:${requestKey}`;
+    const [saved] = await this.db.batch([
+      this.stmt(`INSERT INTO support_messages(ticket_id,sender,actor_id,request_key,text)
+        SELECT s.id,'admin',?,?,? FROM support_tickets s JOIN orders o ON o.id=s.order_id
+        JOIN users u ON u.id=o.user_id AND u.is_deleted=0
+        WHERE s.id=? AND s.assigned_to=? AND s.status<>'closed'
+        ON CONFLICT(request_key) DO NOTHING`, actor, key, message, id, actor),
+      this.stmt(`INSERT INTO outbox(id,method,payload,dedupe_key)
+        SELECT ?, 'sendMessage', json_object('chat_id',o.user_id,'text',?,
+          'reply_markup',json_object('inline_keyboard',json_array(json_array(
+            json_object('text','مشاهده و پاسخ','callback_data',?))))), ?
+        FROM support_tickets s JOIN orders o ON o.id=s.order_id
+        WHERE s.id=? AND changes()>0`, key, `💬 پاسخ پشتیبانی به تیکت #${id}\n\n${message}`, `sp:v:${id}:0`, key, id),
+      this.stmt('UPDATE support_tickets SET status=?,updated_at=unixepoch() WHERE id=? AND changes()>0',
+        waitForUser ? 'waiting_user' : 'in_review', id),
+    ]);
+    if (!saved.meta.changes && !await this.one('SELECT id FROM support_messages WHERE ticket_id=? AND request_key=?', id, key)) {
+      throw domainError('SUPPORT_UNAVAILABLE', 'برای پاسخ، تیکت باز را به خودتان اختصاص دهید و دسترسی کاربر را بررسی کنید');
+    }
   }
   async listAdmins() { return this.all('SELECT * FROM admins ORDER BY user_id'); }
   async getAdmin(userId) { return this.one('SELECT * FROM admins WHERE user_id=?', Number(userId)); }

@@ -1,5 +1,5 @@
 import { createLoginCode } from './auth.js';
-import { neshanUrl, SUPPORT_CONTACT } from './store.js';
+import { neshanUrl, SUPPORT_CONTACT, SUPPORT_STATUSES } from './store.js';
 import { configuredStudentNumberLength, isFumStudent, isValidStudentNumber, normalizeStudentNumber, pricingGroupLabel } from './pricing.js';
 import { formatEventSchedule } from '../public/jalali.js';
 
@@ -8,7 +8,7 @@ const AR_DIGITS = '٠١٢٣٤٥٦٧٨٩';
 const STATUS = { reserved: 'در انتظار رسید', pending: 'در انتظار بررسی', approved: 'تأیید شده', rejected: 'رد شده', cancelled: 'لغو شده', expired: 'مهلت گذشته' };
 const FACULTIES = ['ادبیات و علوم انسانی', 'الهیات و معارف اسلامی', 'حقوق و علوم سیاسی', 'دامپزشکی', 'علوم', 'علوم اداری و اقتصادی', 'علوم تربیتی و روانشناسی', 'علوم ریاضی', 'علوم ورزشی', 'کشاورزی', 'معماری و شهرسازی', 'منابع طبیعی و محیط زیست', 'مهندسی', 'هنر نیشابور'];
 const YES_NO = [[{ text: 'بله', callback_data: 's:yes' }, { text: 'خیر', callback_data: 's:no' }]];
-const MENU = { keyboard: [[{ text: 'رویدادها' }, { text: 'بلیت‌های من' }], [{ text: 'حساب من' }, { text: 'راهنما' }]], resize_keyboard: true };
+const MENU = { keyboard: [[{ text: 'رویدادها' }, { text: 'بلیت‌های من' }], [{ text: 'حساب من' }, { text: 'راهنما' }], [{ text: 'تیکت‌های من' }]], resize_keyboard: true };
 const EVENT_LINK_PREFIX = 'getTicket_';
 const EVENT_LINK_PAGE_SIZE = 20;
 const eventQuestionButton = eventId => ({ text: 'پرسش از مهمان', callback_data: `eq:${eventId}` });
@@ -286,6 +286,40 @@ export async function handleUpdate(update, env, store) {
     await store.setState(from.id, step, { ...data, last_update_id: update.update_id });
   };
   const finishQuestion = (data, text) => transition(data.resume?.step || 'idle', data.resume?.data || {}, text, MENU);
+  const beginSupport = async (orderId, title) => {
+    const state = await store.getState(from.id);
+    const data = stateData(state);
+    const samePayment = state?.step === 'payment_receipt' && data.order_id === orderId;
+    const resume = state?.step === 'support_message' ? data.resume : state && !samePayment ? { step: state.step, data } : null;
+    return transition('support_message', { order_id: orderId, resume }, paragraphs(
+      `💬 پیگیری پرداخت «${title}»`,
+      'توضیح را در یک پیام بفرستید. می‌توانید عکس یا PDF رسید را هم بفرستید و توضیح را در کپشن آن بنویسید.',
+      'برای پیوست جداگانه، بعد از ثبت روی «مشاهده تیکت» و «ارسال پیام» بزنید.',
+      'حداکثر ۱۰۰۰ نویسه و ۱۰ مگابایت. برای انصراف، /cancel را بفرستید.',
+    ));
+  };
+  const showSupportTickets = async (offset = 0) => {
+    const items = await store.listSupportTickets({ userId: from.id, limit: 16, offset });
+    const keyboard = items.slice(0, 15).map(item => [{
+      text: `#${item.id} · ${Array.from(item.event_name).slice(0, 36).join('')} · ${SUPPORT_STATUSES[item.status]}`, callback_data: `sp:v:${item.id}:0`,
+    }]);
+    if (items.length > 15) keyboard.push([{ text: 'صفحه بعد', callback_data: `sp:p:${offset + 15}` }]);
+    if (offset) keyboard.push([{ text: 'صفحه قبل', callback_data: `sp:p:${Math.max(0, offset - 15)}` }]);
+    await send(items.length ? '💬 تیکت‌های پشتیبانی شما' : 'تیکت پشتیبانی ثبت نشده است. پیگیری پرداخت از پیام انقضا یا سفارش در «بلیت‌های من» شروع می‌شود.',
+      keyboard.length ? { inline_keyboard: keyboard } : MENU);
+  };
+  const showSupportTicket = async (ticket, offset) => {
+    const messages = await store.listSupportMessages(ticket.id, { limit: 4, offset });
+    const history = messages.slice(0, 3).reverse().map(item => [
+      item.sender === 'user' ? 'شما' : 'پشتیبانی',
+      item.text,
+      item.has_file ? '📎 پیوست ثبت شده' : '',
+    ].filter(Boolean).join('\n'));
+    const keyboard = [[{ text: ticket.status === 'closed' ? 'باز کردن و پاسخ' : 'ارسال پیام', callback_data: `sp:r:${ticket.id}` }]];
+    if (messages.length > 3) keyboard.push([{ text: 'پیام‌های قدیمی‌تر', callback_data: `sp:v:${ticket.id}:${offset + 3}` }]);
+    if (offset) keyboard.push([{ text: 'پیام‌های تازه‌تر', callback_data: `sp:v:${ticket.id}:${Math.max(0, offset - 3)}` }]);
+    await send(paragraphs(`💬 تیکت #${ticket.id} · ${ticket.event_name}\nوضعیت: ${SUPPORT_STATUSES[ticket.status]}`, ...history), { inline_keyboard: keyboard });
+  };
   const startSignup = (eventId = null) => transition('signup:first_name', {
     profile: {}, username: from.username || '', ...(eventId ? { registration_event_id: eventId } : {}),
   }, paragraphs('👤 ساخت حساب کاربری', eventId && 'پس از ساخت حساب، ثبت‌نام همین رویداد را ادامه می‌دهید.', 'نام خود را وارد کنید.'));
@@ -336,6 +370,27 @@ export async function handleUpdate(update, env, store) {
         return answer(parts[2] === 'y' ? '✅ پرداخت تأیید شد' : 'درخواست رد شد');
       }
       if (chat.type !== 'private') return answer('این گزینه از گفت‌وگوی خصوصی ربات در دسترس است');
+      const supportOrder = /^sp:o:([a-zA-Z0-9-]{1,50})$/.exec(data);
+      if (supportOrder) {
+        const order = await store.getSupportOrder(supportOrder[1], from.id);
+        if (!order) return answer('سفارش برای پیگیری در دسترس نیست');
+        if (order.ticket_id) {
+          const ticket = await store.getSupportTicket(order.ticket_id, from.id);
+          if (!ticket) return answer('تیکت در دسترس نیست');
+          await showSupportTicket(ticket, 0);
+        } else await beginSupport(order.id, order.event_name);
+        return answer();
+      }
+      const supportPage = /^sp:p:(\d{1,6})$/.exec(data);
+      if (supportPage) { await showSupportTickets(Number(supportPage[1])); return answer(); }
+      const supportView = /^sp:(v|r):(\d{1,15})(?::(\d{1,6}))?$/.exec(data);
+      if (supportView) {
+        const ticket = await store.getSupportTicket(supportView[2], from.id);
+        if (!ticket) return answer('تیکت در دسترس نیست');
+        if (supportView[1] === 'r') await beginSupport(ticket.order_id, ticket.event_name);
+        else await showSupportTicket(ticket, Number(supportView[3] || 0));
+        return answer();
+      }
       const question = /^eq:(\d{1,16})$/.exec(data);
       if (question) {
         const eventId = positive(question[1]);
@@ -378,6 +433,7 @@ export async function handleUpdate(update, env, store) {
           const buttons = [];
           if (order.status === 'reserved') buttons.push([{ text: 'ارسال رسید', callback_data: `p:${order.id}` }]);
           if (['reserved', 'pending'].includes(order.status)) buttons.push([{ text: 'لغو سفارش', callback_data: `c:${order.id}` }]);
+          if (order.status === 'expired' && order.unit_price > 0) buttons.push([{ text: 'پیگیری پرداخت', callback_data: `sp:o:${order.id}` }]);
           await send(orderText(order), buttons.length ? { inline_keyboard: buttons } : MENU);
         }
         return answer();
@@ -443,7 +499,7 @@ export async function handleUpdate(update, env, store) {
     if (/^\/chatid(?:@[a-z\d_]+)?\s*$/i.test(String(message?.text || '').trim())) return send(`شناسهٔ این گفت‌وگو: ${chat.id}`);
     if (chat.type !== 'private') return;
     const rawText = String(message.text || '').trim();
-    const aliases = { 'رویدادها': '/available_events', 'بلیت‌های من': '/my_tickets', 'حساب من': '/get_account', 'راهنما': '/help' };
+    const aliases = { 'رویدادها': '/available_events', 'بلیت‌های من': '/my_tickets', 'تیکت‌های من': '/my_support', 'حساب من': '/get_account', 'راهنما': '/help' };
     const text = aliases[rawText] || rawText;
     const match = /^\/([a-z_]+)(?:@[a-z\d_]+)?(?:\s+([\s\S]*))?$/i.exec(text);
     if (!match) {
@@ -451,6 +507,21 @@ export async function handleUpdate(update, env, store) {
       if (state) {
         const data = stateData(state);
         if (data.last_update_id === update.update_id) return;
+        if (state.step === 'support_message') {
+          const photo = message.photo?.at(-1);
+          const document = message.document;
+          const file = photo || document;
+          if ((document && !['image/jpeg', 'image/png', 'image/webp', 'application/pdf'].includes(document.mime_type)) || (file?.file_size || 0) > 10 * 1024 * 1024) {
+            return send('رسید را به‌صورت عکس یا PDF تا ۱۰ مگابایت بفرستید.');
+          }
+          const description = String(message.text || message.caption || '').trim();
+          if ((!description && !file?.file_id) || description.length > 1000) return send('یک پیام متنی تا ۱۰۰۰ نویسه، عکس یا PDF بفرستید.');
+          const id = await store.submitSupportMessage(data.order_id, from.id, {
+            text: description, fileId: file?.file_id, requestKey: `${updateKey}:support`,
+          });
+          return transition(data.resume?.step || 'idle', data.resume?.data || {}, `✅ پیام شما در تیکت #${id} ثبت شد. پاسخ را همین‌جا می‌گیرید.`,
+            { inline_keyboard: [[{ text: 'مشاهده تیکت', callback_data: `sp:v:${id}:0` }]] });
+        }
         if (state.step === 'event_question') {
           if (!rawText || rawText.length > 1000) return send('سؤال را در یک پیام متنی حداکثر ۱۰۰۰ نویسه‌ای بفرستید.');
           try {
@@ -525,6 +596,7 @@ export async function handleUpdate(update, env, store) {
       const events = commandGuide('🎫 رویدادها و بلیت‌ها', [
         ['رویدادهای فعال', '/available_events'],
         ['سفارش‌ها و بلیت‌های من', '/my_tickets'],
+        ['پیگیری تیکت‌های پشتیبانی', '/my_support'],
       ]);
       const account = commandGuide('👤 حساب کاربری', [
         ['ساخت حساب', '/add_account'],
@@ -549,6 +621,10 @@ export async function handleUpdate(update, env, store) {
     if (command === 'cancel') {
       const state = await store.getState(from.id);
       if (state?.step === 'event_question') return finishQuestion(stateData(state), 'ارسال سؤال لغو شد.');
+      if (state?.step === 'support_message') {
+        const { resume } = stateData(state);
+        return transition(resume?.step || 'idle', resume?.data || {}, 'ارسال پیام پشتیبانی لغو شد.', MENU);
+      }
       await send('مرحلهٔ فعلی متوقف شد.\n\nبرای لغو یک رزرو، از «بلیت‌های من» وارد سفارش شوید.', MENU);
       await store.clearState(from.id);
       return;
@@ -579,6 +655,7 @@ export async function handleUpdate(update, env, store) {
     }
     if (command === 'available_events') return showEvents();
     if (['my_tickets', 'my_orders'].includes(command)) return showOrders();
+    if (command === 'my_support') return showSupportTickets();
     if (command === 'admin') return panel();
     if (command === 'promote_me') return send('🔒 مالک ربات دسترسی مدیر را تعیین می‌کند.');
     if (!isChecker) return send(UNKNOWN_COMMAND);
