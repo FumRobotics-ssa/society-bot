@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { Readable } from 'node:stream';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDatabase } from './sqlite.js';
 import { handleRequest } from './app.js';
@@ -31,14 +31,14 @@ for (const filename of readdirSync(resolve(root, 'migrations')).filter(x => x.en
     } catch (error) { db.native.exec('ROLLBACK'); throw error; }
   }
 }
-const mime = { '.html': 'text/html;charset=utf-8', '.js': 'application/javascript;charset=utf-8', '.css': 'text/css;charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml;charset=utf-8', '.ttf': 'font/ttf', '.woff2': 'font/woff2' };
+const assetDirectory = resolve(root, 'public');
+const mime = { '.html': 'text/html;charset=utf-8', '.js': 'application/javascript;charset=utf-8', '.css': 'text/css;charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml;charset=utf-8', '.ico': 'image/x-icon', '.ttf': 'font/ttf', '.woff2': 'font/woff2' };
 const env = { ...process.env, DB: db, ASSETS: { async fetch(request) {
-  const name = new URL(request.url).pathname.slice(1);
-  if (!['admin.html', 'admin.js', 'grid.js', 'style.css', 'ticket.css', 'logo.png', 'logo-white.svg'].includes(name) && !/^fonts\/(?:Meem-[A-Za-z]+\.ttf|fontawesome-webfont\.woff2)$/.test(name)) return new Response('Not found', { status: 404 });
-  const file = resolve(root, 'public', name);
-  if (!existsSync(file)) return new Response('Not found', { status: 404 });
-  const ext = '.' + name.split('.').at(-1);
-  return new Response(readFileSync(file), { headers: { 'Content-Type': mime[ext] } });
+  // The shared app route allowlists the public assets before calling this binding.
+  const file = resolve(assetDirectory, new URL(request.url).pathname.slice(1));
+  const type = mime[extname(file)];
+  if (!file.startsWith(assetDirectory + sep) || !type || !existsSync(file)) return new Response('Not found', { status: 404 });
+  return new Response(readFileSync(file), { headers: { 'Content-Type': type } });
 } } };
 const tasks = new Set();
 const ctx = { waitUntil(promise) { tasks.add(promise); promise.catch(() => console.error('Background task failed')).finally(() => tasks.delete(promise)); } };
