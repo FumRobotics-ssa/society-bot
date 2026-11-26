@@ -355,7 +355,7 @@ export async function handleUpdate(update, env, store) {
     }
     await store.upsertUser({ id: from.id, username: user.username, profile });
     if (data.event_id) {
-      await send('✅ شمارهٔ دانشجویی در حساب شما ذخیره شد.');
+      await send('✅ شمارهٔ دانشجویی در حساب شما ذخیره شد.', undefined, 'student_number_saved');
       return selectEvent(data.event_id);
     }
     await store.setState(from.id, 'idle', { last_update_id: update.update_id });
@@ -494,6 +494,10 @@ export async function handleUpdate(update, env, store) {
         try {
           result = await store.reserve(from.id, current.event_id, current.quantity, `${updateKey}:reserve`, current, configuredStudentNumberLength(env.FUM_STUDENT_NUMBER_LENGTH));
         } catch (error) {
+          if (error.code === 'EVENT_INACTIVE') {
+            await transition('idle', {}, `ℹ️ ${error.message}`, MENU);
+            return answer('ثبت‌نام این رویداد بسته شده است');
+          }
           if (error.code === 'PRICE_CHANGED') {
             await answer('مبلغ تغییر کرده است');
             await store.setState(from.id, 'idle', { last_update_id: update.update_id });

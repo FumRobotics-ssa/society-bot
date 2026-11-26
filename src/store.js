@@ -717,7 +717,7 @@ export class Store {
     return this.one(`SELECT
       (SELECT COUNT(*) FROM users WHERE is_deleted=0) AS users,
       (SELECT COUNT(*) FROM events WHERE archived=0) AS events,
-      (SELECT COUNT(*) FROM events WHERE active=1 AND archived=0) AS active_events,
+      (SELECT COUNT(*) FROM events e WHERE ${REGISTRATION_OPEN}) AS active_events,
       (SELECT COUNT(*) FROM orders WHERE status='pending' AND expires_at>unixepoch()) AS pending_orders,
       (SELECT COUNT(*) FROM tickets t JOIN orders o ON o.id=t.order_id WHERE o.status='approved') AS tickets,
       (SELECT COUNT(*) FROM tickets t JOIN orders o ON o.id=t.order_id WHERE o.status='approved' AND t.checked_in_at IS NOT NULL) AS attended,

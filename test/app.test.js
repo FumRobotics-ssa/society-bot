@@ -115,6 +115,7 @@ test('registration cutoff rejects a stale quote and leaves prior orders payable'
   const quote = await store.quoteOrder(2, event.id, 1);
   await store.saveEvent({ registration_closes_at: 1 }, event.id);
   assert.equal((await store.listEvents({ activeOnly: true })).length, 0);
+  assert.equal((await store.stats()).active_events, 0);
   await assert.rejects(store.reserve(2, event.id, 1, 'stale-quote', quote), { code: 'EVENT_INACTIVE' });
   assert.equal((await store.submitReceipt(order.id, 1, 'receipt')).status, 'pending');
   assert.equal((await store.reviewOrder(order.id, true, 99)).status, 'approved');

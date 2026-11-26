@@ -333,12 +333,15 @@ function eventCard(event, editable) {
   card.append(meta, eventRegistrationStats(event));
   const actions = el('div', null, 'actions');
   if (editable) {
-    actions.append(button('ویرایش', () => editEvent(event)), button(yes(event.active) ? 'توقف رزرو' : 'فعال کردن رزرو', async () => {
+    const deadlinePassed = event.registration_closes_at != null && event.registration_closes_at <= Date.now() / 1000;
+    const bookingAction = deadlinePassed ? 'باز کردن دوبارهٔ ثبت‌نام' : yes(event.active) ? 'توقف رزرو' : 'فعال کردن رزرو';
+    actions.append(button('ویرایش', () => editEvent(event)), button(bookingAction, async () => {
       const activating = !yes(event.active);
-      if (activating && !event.starts_at) {
+      if (deadlinePassed || (activating && !event.starts_at)) {
         editEvent(event);
         const form = $('event-form');
         form.dataset.requiresStart = 'true';
+        form.dataset.reopening = String(deadlinePassed);
         form.elements.namedItem('active').checked = true;
         return;
       }
@@ -463,6 +466,7 @@ function editEvent(event = null, { copy = false } = {}) {
   }
   updateEventPricingFields();
   form.dataset.requiresStart = String(copy || !event || Boolean(event.starts_at));
+  form.dataset.reopening = 'false';
   const schedule = copy ? null : event;
   fillDateTime('event-jalali-date', 'event-start-time', schedule?.starts_at);
   fillDateTime('event-end-date', 'event-end-time', schedule?.ends_at);
@@ -766,6 +770,9 @@ $('event-form').addEventListener('submit', (event) => {
     const registrationDay = $('registration-date').value, registrationTime = $('registration-time').value;
     if (registrationTime && !registrationDay) throw new Error('تاریخ پایان ثبت‌نام را انتخاب کنید');
     body.registration_closes_at = registrationDay ? Date.parse(jalaliTimeToIso(parseJalaliDate(registrationDay), registrationTime || '23:59')) / 1000 : null;
+    if (form.dataset.reopening === 'true' && body.active && body.registration_closes_at != null && body.registration_closes_at <= Date.now() / 1000) {
+      throw new Error('مهلت ثبت‌نام را به تاریخی در آینده تغییر دهید یا پاک کنید');
+    }
     const questionFields = readQuestionFields();
     if (JSON.stringify(questionFields) !== form.dataset.questionFields) {
       const { enabled, day, time, maxQuestions } = questionFields;
