@@ -6,7 +6,7 @@ import { Store } from '../src/store.js';
 import { handleRequest } from '../src/app.js';
 import { handleUpdate } from '../src/bot.js';
 import { createLoginCode, exchangeLogin, digest, SESSION_COOKIE } from '../src/auth.js';
-import { receiveUpdate, processOutbox, processInbox } from '../src/jobs.js';
+import { outboxMetricsQuery, processInbox, processOutbox, receiveUpdate, refreshOutboxPressure } from '../src/jobs.js';
 import { receiveTelegram } from '../src/telegram-receiver.js';
 import worker from '../src/worker.js';
 
@@ -614,12 +614,14 @@ test('an outbox backlog delays broadcasts and ordinary intake until the outgoing
   await store.enqueue('__broadcast', { text: 'hello' }, 'broadcast-test');
   await db.prepare(`WITH RECURSIVE filler(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM filler WHERE n<1023)
     INSERT INTO outbox(id,method,payload,available_at) SELECT 'future-'||n,'sendMessage','{}',unixepoch()+7200 FROM filler`).run();
+  await refreshOutboxPressure(env, (await db.prepare(outboxMetricsQuery).first()).depth);
   await receiveUpdate(env, { update_id: 1, message: { from: { id: 9 } } });
   await processInbox(env, 1);
   await processOutbox(env, 1, 'bulk');
   assert.equal((await store.one('SELECT attempts FROM inbox')).attempts, 0);
   assert.equal((await store.one("SELECT attempts FROM outbox WHERE dedupe_key='broadcast-test'")).attempts, 0);
   await db.prepare("DELETE FROM outbox WHERE id='future-1'").run();
+  await refreshOutboxPressure(env, (await db.prepare(outboxMetricsQuery).first()).depth);
   await processInbox(env, 1);
   await processOutbox(env, 1, 'bulk');
   assert.equal((await store.one('SELECT status FROM inbox')).status, 'done');

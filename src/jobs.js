@@ -11,8 +11,14 @@ const criticalInboxReserve = 32;
 const criticalStreamReserve = 2;
 const outboxSoftLimit = 1024;
 const activeOutbox = "status IN ('pending','processing')";
-const outboxHasRoom = `NOT EXISTS (SELECT 1 FROM outbox INDEXED BY outbox_active
-  WHERE ${activeOutbox} LIMIT 1 OFFSET ${outboxSoftLimit - 1})`;
+const outboxHasRoom = "NOT EXISTS (SELECT 1 FROM queue_control WHERE name='outbox' AND paused=1)";
+export const outboxMetricsQuery = `SELECT COUNT(*) AS depth,COALESCE(unixepoch()-MIN(created_at),0) AS age
+  FROM (SELECT created_at FROM outbox INDEXED BY outbox_active WHERE ${activeOutbox} ORDER BY created_at LIMIT ${outboxSoftLimit})`;
+
+export async function refreshOutboxPressure(env, depth) {
+  const paused = Number(depth >= outboxSoftLimit);
+  await env.DB.prepare("UPDATE queue_control SET paused=? WHERE name='outbox' AND paused<>?").bind(paused, paused).run();
+}
 function cleanError(error, env) {
   let text = String(error?.message || 'job failed').slice(0, 500);
   for (const key of ['BOT_TOKEN', 'WEBHOOK_SECRET', 'S3_SECRET_ACCESS_KEY', 'S3_ACCESS_KEY_ID']) {
@@ -151,7 +157,6 @@ async function broadcast(job, env) {
   if (statements.length) await env.DB.batch(statements);
 }
 const posterFileIds = new Map();
-const posterWork = "method='editMessageMedia' OR (method='sendPhoto' AND COALESCE(dedupe_key,'') LIKE 'update:%:photo')";
 
 async function telegram(method, data, env, timeout) {
   if (!/^[A-Za-z]+$/.test(method)) throw new Error('Unknown Telegram method');
@@ -214,18 +219,16 @@ async function sendTelegram(method, env, timeout, body, headers) {
   }
   return result.result;
 }
-const outboxLanes = {
-  interactive: "AND method NOT IN ('sendPhoto','sendDocument','editMessageMedia','__broadcast','__backup') AND (dedupe_key IS NULL OR dedupe_key NOT LIKE '%:user:%')",
-  media: `AND method IN ('sendPhoto','sendDocument') AND NOT (${posterWork})`,
-  poster: `AND (${posterWork})`,
-  bulk: "AND (method IN ('__broadcast','__backup') OR (method='sendMessage' AND dedupe_key LIKE '%:user:%'))",
-};
+const outboxLanes = new Set(['interactive', 'media', 'poster', 'bulk']);
 
 export async function processOutbox(env, limit = 8, lane = null) {
-  const laneFilter = lane === null ? '' : outboxLanes[lane];
-  if (laneFilter === undefined) throw new Error('Unknown outbox lane');
+  if (lane !== null && !outboxLanes.has(lane)) throw new Error('Unknown outbox lane');
+  const laneFilter = lane === null ? '' : 'AND queue_lane=?';
+  const laneArgs = lane === null ? [] : [lane];
+  const pendingIndex = lane === null ? '' : 'INDEXED BY outbox_ready_lane';
+  const processingIndex = lane === null ? '' : 'INDEXED BY outbox_processing_lane';
   const concurrencyGuard = env.OUTBOX_LANE_CONCURRENCY ? `AND (
-    SELECT COUNT(*) FROM outbox WHERE status='processing' AND lease_until>=? ${laneFilter}
+    SELECT COUNT(*) FROM outbox ${processingIndex} WHERE status='processing' AND lease_until>=? ${laneFilter}
   ) < ?` : '';
   const backpressure = env.OUTBOX_BACKPRESSURE && (lane === null || lane === 'bulk')
     ? `AND (method<>'__broadcast' OR ${outboxHasRoom})` : '';
@@ -233,11 +236,11 @@ export async function processOutbox(env, limit = 8, lane = null) {
     const at = now();
     // A timed-out receipt send or an expired send lease may already have posted the media.
     const job = await env.DB.prepare(`WITH pending AS (
-      SELECT id,available_at,created_at FROM outbox INDEXED BY outbox_ready
+      SELECT id,available_at,created_at FROM outbox ${pendingIndex}
       WHERE status='pending' AND available_at<=? ${laneFilter} ${backpressure}
       ORDER BY available_at,created_at,id LIMIT 1
     ), expired AS (
-      SELECT id,available_at,created_at FROM outbox INDEXED BY outbox_processing
+      SELECT id,available_at,created_at FROM outbox ${processingIndex}
       WHERE status='processing' AND lease_until<? ${laneFilter} ${backpressure}
       ORDER BY available_at,created_at,id LIMIT 1
     ), candidate AS (
@@ -252,8 +255,9 @@ export async function processOutbox(env, limit = 8, lane = null) {
       lease_until=CASE WHEN next_job.uncertain_receipt THEN 0 ELSE ? END,
       attempts=attempts + (NOT next_job.uncertain_receipt),
       last_error=CASE WHEN next_job.uncertain_receipt THEN ? ELSE last_error END
-    FROM next_job WHERE outbox.id=next_job.id ${concurrencyGuard} RETURNING *`).bind(at, at, at + 90, receiptDeliveryUnconfirmed,
-      ...(env.OUTBOX_LANE_CONCURRENCY ? [at, env.OUTBOX_LANE_CONCURRENCY] : [])).first();
+    FROM next_job WHERE outbox.id=next_job.id ${concurrencyGuard} RETURNING *`)
+      .bind(at, ...laneArgs, at, ...laneArgs, at + 90, receiptDeliveryUnconfirmed,
+        ...(env.OUTBOX_LANE_CONCURRENCY ? [at, ...laneArgs, env.OUTBOX_LANE_CONCURRENCY] : [])).first();
     if (!job) return;
     if (job.status === 'failed') continue;
     const receiptDelivery = job.dedupe_key?.startsWith('receipt:') && ['sendPhoto', 'sendDocument'].includes(job.method);
