@@ -14,6 +14,7 @@ run_worker_first = true
 html_handling = "none"
 
 [vars]
+HOSTING_MODE = "arvan_relay"
 PUBLIC_URL = "https://robotics-society.fum-robotics-ssa.workers.dev"
 OWNER_IDS = "1229020784"
 VERIFICATION_CHAT = "-1004405041822"
@@ -61,17 +62,9 @@ limit = 600
 period = 60
 
 [[ratelimits]]
-name = "WEB_REQUEST_RATE"
-namespace_id = "9472061847"
+name = "TELEGRAM_RELAY_RATE"
+namespace_id = "9472061849"
 
 [ratelimits.simple]
-limit = 900
-period = 60
-
-[[ratelimits]]
-name = "WEB_LOGIN_RATE"
-namespace_id = "9472061848"
-
-[ratelimits.simple]
-limit = 120
+limit = 600
 period = 60

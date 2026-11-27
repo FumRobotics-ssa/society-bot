@@ -564,14 +564,44 @@ test('Worker refuses to claim additional inbox work while another invocation hol
   assert.equal((await store.one("SELECT count(*) AS n FROM inbox WHERE status='done'")).n, 2);
 });
 
-test('Worker previews expose health while the canonical origin applies the login rate limit', async t => {
+test('Cloudflare app mode limits only authenticated Telegram ingress', async t => {
   const { db, env } = fixture();
   t.after(() => db.close());
   const ctx = { waitUntil() {} };
-  env.WEB_LOGIN_RATE = { limit: async () => ({ success: false }) };
+  const rate = t.mock.fn(async () => ({ success: false }));
+  env.HOSTING_MODE = 'cloudflare';
+  env.TELEGRAM_GLOBAL_RATE = { limit: rate };
   assert.equal((await worker.fetch(new Request('https://preview.example.test/health'), env, ctx)).status, 200);
   assert.equal((await worker.fetch(new Request('https://preview.example.test/api/session'), env, ctx)).status, 404);
-  assert.equal((await worker.fetch(new Request('https://example.test/api/session', { method: 'POST' }), env, ctx)).status, 429);
+  assert.equal((await worker.fetch(new Request('https://example.test/admin'), env, ctx)).status, 200);
+  const options = { method: 'POST', body: JSON.stringify({ update_id: 1, message: { from: { id: 1 } } }) };
+  assert.equal((await worker.fetch(new Request('https://example.test/telegram', options), env, ctx)).status, 403);
+  assert.equal(rate.mock.calls.length, 0);
+  const authorized = new Request('https://example.test/telegram', {
+    ...options, headers: { 'X-Telegram-Bot-Api-Secret-Token': env.WEBHOOK_SECRET },
+  });
+  assert.equal((await worker.fetch(authorized, env, ctx)).status, 200);
+  assert.equal(rate.mock.calls.length, 1);
+  assert.equal(await db.prepare('SELECT count(*) FROM inbox').first('count(*)'), 0);
+});
+
+test('automatic deployment uses the Arvan relay and limits its authenticated Telegram API only', async t => {
+  const rate = t.mock.fn(async () => ({ success: false }));
+  const env = { BOT_TOKEN: 'fixture', ARVAN_RELAY_TOKEN: 'fixture', TELEGRAM_RELAY_RATE: { limit: rate } };
+  const schedule = t.mock.fn();
+  const ctx = { waitUntil: schedule };
+  const panel = await worker.fetch(new Request('https://worker.example.test/admin'), env, ctx);
+  assert.equal(panel.status, 302);
+  assert.ok(panel.headers.get('Location').endsWith('/admin'));
+  worker.scheduled({}, env, ctx);
+  assert.equal(schedule.mock.calls.length, 0);
+  const endpoint = 'https://worker.example.test/_arvan_telegram/getMe';
+  assert.equal((await worker.fetch(new Request(endpoint), env, ctx)).status, 404);
+  assert.equal(rate.mock.calls.length, 0);
+  const response = await worker.fetch(new Request(endpoint, { headers: { 'X-Robotics-Origin-Token': 'fixture' } }), env, ctx);
+  assert.equal(response.status, 429);
+  assert.equal((await response.json()).parameters.retry_after, 10);
+  assert.equal(rate.mock.calls.length, 1);
 });
 
 test('interactive outbox sends registration replies ahead of waiting media and broadcasts', async t => {

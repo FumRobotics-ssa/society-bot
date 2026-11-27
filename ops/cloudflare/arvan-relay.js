@@ -1,20 +1,18 @@
+import { safeEqual } from '../../src/auth.js';
+
 const origin = 'https://37.152.178.89';
 const pathPrefix = '/_arvan_telegram/';
 const apiMethods = new Set([
   'getMe', 'getUpdates', 'getFile', 'sendMessage', 'sendPhoto', 'sendDocument', 'answerCallbackQuery', 'editMessageText', 'editMessageReplyMarkup',
 ]);
-function authorized(provided, secret) {
-  if (!provided || !secret || provided.length !== secret.length) return false;
-  const text = new TextEncoder();
-  const providedBytes = text.encode(provided);
-  const secretBytes = text.encode(secret);
-  return providedBytes.length === secretBytes.length && crypto.subtle.timingSafeEqual(providedBytes, secretBytes);
-}
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname.startsWith(pathPrefix)) {
-      if (!authorized(request.headers.get('X-Robotics-Origin-Token'), env.ARVAN_RELAY_TOKEN)) return new Response('Not found', {status: 404});
+      const provided = request.headers.get('X-Robotics-Origin-Token');
+      if (!provided || !env.ARVAN_RELAY_TOKEN || !await safeEqual(provided, env.ARVAN_RELAY_TOKEN)) {
+        return new Response('Not found', {status: 404});
+      }
       if (!env.BOT_TOKEN) return new Response('Temporarily unavailable', {status: 503});
       const route = url.pathname.slice(pathPrefix.length);
       const file = route.match(/^file\/((?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)$/);
@@ -23,6 +21,12 @@ export default {
       else if (apiMethods.has(route) && (request.method === 'POST' || (request.method === 'GET' && route === 'getMe'))) {
         path = '/bot' + env.BOT_TOKEN + '/' + route;
       } else return new Response('Not found', {status: 404});
+      const key = route === 'getUpdates' ? 'polling' : 'api';
+      if (env.TELEGRAM_RELAY_RATE && !(await env.TELEGRAM_RELAY_RATE.limit({ key })).success) {
+        return Response.json({ ok: false, error_code: 429, description: 'Telegram relay rate limit', parameters: { retry_after: 10 } }, {
+          status: 429, headers: { 'Retry-After': '10', 'Cache-Control': 'no-store' },
+        });
+      }
       const headers = new Headers();
       const contentType = request.headers.get('Content-Type');
       if (contentType) headers.set('Content-Type', contentType);
