@@ -554,6 +554,35 @@ test('an uploaded event poster goes to Telegram as a file and rejected photos ke
   assert.equal(fetch.mock.calls.filter(({ arguments: [url] }) => url.endsWith('/sendPhoto')).length, 3);
 });
 
+test('the poster lane reuses the Telegram image and uploads again after a panel edit', async t => {
+  const f = setup();
+  t.after(() => f.db.close());
+  Object.assign(f.env, { DB: f.db, BOT_TOKEN: 'fixture-poster-cache', DEFER_TELEGRAM_JOBS: true });
+  const event = await f.store.saveEvent({ name: 'رویداد آزمایشی', capacity: 5, poster_url: 'data:image/jpeg;base64,AAEC' });
+  await f.store.enqueue('sendPhoto', { chat_id: 1, photo: 'receipt-photo' }, 'receipt:fixture:photo');
+  const sent = [];
+  t.mock.method(globalThis, 'fetch', async (url, { body }) => {
+    if (!url.endsWith('/sendPhoto')) return Response.json({ ok: true });
+    if (typeof body === 'string') {
+      sent.push(JSON.parse(body).photo);
+      return Response.json({ ok: true });
+    }
+    sent.push([...new Uint8Array(await body.get('photo').arrayBuffer())]);
+    return Response.json({ ok: true, result: { photo: [{ file_id: 'telegram-poster-id' }] } });
+  });
+
+  await f.click(`e:${event.id}`);
+  await processOutbox(f.env, 1, 'poster');
+  await f.click(`e:${event.id}`);
+  await processOutbox(f.env, 1, 'poster');
+  await f.store.saveEvent({ poster_url: 'data:image/jpeg;base64,AwQF' }, event.id);
+  await f.click(`e:${event.id}`);
+  await processOutbox(f.env, 1, 'poster');
+
+  assert.deepEqual(sent, [[0, 1, 2], 'telegram-poster-id', [3, 4, 5]]);
+  assert.equal((await f.store.one("SELECT status FROM outbox WHERE dedupe_key='receipt:fixture:photo'")).status, 'pending');
+});
+
 test('long poster details preserve the description, venue and booking instructions', async t => {
   const f = setup();
   t.after(() => f.db.close());

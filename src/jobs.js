@@ -126,12 +126,25 @@ async function broadcast(job, env) {
   }
   if (statements.length) await env.DB.batch(statements);
 }
+const posterFileIds = new Map();
+const posterWork = "method='sendPhoto' AND COALESCE(dedupe_key,'') LIKE 'update:%:photo'";
+
 async function telegram(method, data, env, timeout) {
   if (!/^[A-Za-z]+$/.test(method)) throw new Error('Unknown Telegram method');
   const { _documentText, filename, _eventPosterId, _fallbackToText, _optionalPoster, ...fields } = data;
   let poster;
   if (_eventPosterId) {
     const stored = await env.DB.prepare('SELECT poster_url FROM events WHERE id=?').bind(_eventPosterId).first('poster_url');
+    const cached = posterFileIds.get(_eventPosterId);
+    if (cached && cached.source === stored && cached.botToken === env.BOT_TOKEN) {
+      try {
+        await sendTelegram(method, env, timeout, JSON.stringify({ ...fields, photo: cached.fileId }), { 'Content-Type': 'application/json' });
+        return;
+      } catch (error) {
+        if (!error.invalidPhoto || !/file (?:identifier|reference)|file_id/i.test(error.message)) throw error;
+        posterFileIds.delete(_eventPosterId);
+      }
+    }
     const match = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/i.exec(stored || '');
     if (!match || match[2].length % 4 !== 0) {
       const error = new Error('Stored event poster is missing or invalid');
@@ -139,15 +152,26 @@ async function telegram(method, data, env, timeout) {
       throw error;
     }
     const mime = match[1].toLowerCase();
-    poster = new Blob([Uint8Array.from(atob(match[2]), byte => byte.charCodeAt(0))], { type: mime });
+    poster = { source: stored, file: new Blob([Uint8Array.from(atob(match[2]), byte => byte.charCodeAt(0))], { type: mime }) };
   }
   let body, headers;
   if (_documentText !== undefined || poster) {
     body = new FormData();
     for (const [key, value] of Object.entries(fields)) body.set(key, typeof value === 'object' ? JSON.stringify(value) : String(value));
-    if (poster) body.set('photo', poster, `event-poster.${poster.type.split('/')[1]}`);
+    if (poster) body.set('photo', poster.file, `event-poster.${poster.file.type.split('/')[1]}`);
     else body.set('document', new Blob([_documentText], { type: filename?.endsWith('.csv') ? 'text/csv;charset=utf-8' : 'application/json' }), filename || 'export.json');
   } else { body = JSON.stringify(fields); headers = { 'Content-Type': 'application/json' }; }
+  const result = await sendTelegram(method, env, timeout, body, headers);
+  const fileId = result?.photo?.at(-1)?.file_id;
+  if (poster && typeof fileId === 'string' && fileId) {
+    if (!posterFileIds.has(_eventPosterId) && posterFileIds.size >= 24) {
+      posterFileIds.delete(posterFileIds.keys().next().value);
+    }
+    posterFileIds.set(_eventPosterId, { source: poster.source, botToken: env.BOT_TOKEN, fileId });
+  }
+}
+
+async function sendTelegram(method, env, timeout, body, headers) {
   const response = await telegramFetch(env, method, { method: 'POST', headers, body, signal: AbortSignal.timeout(timeout) });
   const result = await response.json();
   if (!result.ok) {
@@ -158,10 +182,12 @@ async function telegram(method, data, env, timeout) {
     error.invalidPhoto = method === 'sendPhoto' && result.error_code === 400;
     throw error;
   }
+  return result.result;
 }
 const outboxLanes = {
   interactive: "AND method NOT IN ('sendPhoto','sendDocument','__broadcast','__backup') AND (dedupe_key IS NULL OR dedupe_key NOT LIKE '%:user:%')",
-  media: "AND method IN ('sendPhoto','sendDocument')",
+  media: `AND method IN ('sendPhoto','sendDocument') AND NOT (${posterWork})`,
+  poster: `AND (${posterWork})`,
   bulk: "AND (method IN ('__broadcast','__backup') OR (method='sendMessage' AND dedupe_key LIKE '%:user:%'))",
 };
 
@@ -204,13 +230,14 @@ export async function processOutbox(env, limit = 8, lane = null) {
       } else {
         payload = JSON.parse(job.payload);
         if (payload._optionalPoster && now() - job.created_at > 120) throw new Error('Optional event poster expired');
-        const timeout = receiptDelivery ? 25000 : (payload._fallbackToText || payload._optionalPoster) ? 6000 : 10000;
+        const timeout = receiptDelivery || payload._optionalPoster ? 25000 : payload._fallbackToText ? 6000 : 10000;
         await telegram(job.method, payload, env, timeout);
       }
       await env.DB.prepare("UPDATE outbox SET status='sent',sent_at=?,last_error=NULL WHERE id=? AND lease_until=?").bind(now(), job.id, job.lease_until).run();
     } catch (error) {
       const uncertainReceipt = receiptDelivery && !error.permanent && !error.safeToRetry;
-      const failed = uncertainReceipt || error.permanent || payload?._optionalPoster || job.attempts >= 10;
+      const posterRetryExhausted = payload?._optionalPoster && (!error.safeToRetry || job.attempts >= 2);
+      const failed = uncertainReceipt || error.permanent || posterRetryExhausted || job.attempts >= 10;
       if (job.method === 'sendPhoto' && payload?._fallbackToText && (error.invalidPhoto || (!error.permanent && !error.safeToRetry))) {
         const { chat_id, caption: text, reply_markup } = payload;
         await env.DB.prepare(`UPDATE outbox SET method='sendMessage',payload=?,status='pending',
@@ -244,7 +271,8 @@ export async function runJobs(env, { maintenance: maintain = false, inboxLimit =
   await processInbox(env, inboxLimit, streamKey);
   if (env.QUEUE_LANES) {
     await Promise.all([
-      processOutbox(env, 4, 'interactive'), processOutbox(env, 1, 'media'), processOutbox(env, 1, 'bulk'),
+      processOutbox(env, 4, 'interactive'), processOutbox(env, 1, 'media'),
+      processOutbox(env, 1, 'poster'), processOutbox(env, 1, 'bulk'),
     ]);
     return;
   }
