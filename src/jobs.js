@@ -2,6 +2,7 @@ import { Store } from './store.js';
 import { handleUpdate, notifyOrder } from './bot.js';
 import { now } from './auth.js';
 import { runBackup } from './backup.js';
+import { inspectTelegramBurst, TELEGRAM_PENDING_LIMIT } from './telegram-ingress.js';
 
 const changes = result => result.meta?.changes || 0;
 const receiptDeliveryUnconfirmed = 'Receipt delivery unconfirmed. Review the receipt in the admin panel.';
@@ -21,8 +22,26 @@ export async function receiveUpdate(env, update) {
   const actor = update.callback_query?.from?.id || update.message?.from?.id;
   if (isBlockedTelegramUser(env, actor)) return null;
   const streamKey = String(actor || update.update_id);
-  await env.DB.prepare('INSERT OR IGNORE INTO inbox(update_id,stream_key,payload) VALUES(?,?,?)').bind(update.update_id, streamKey, JSON.stringify(update)).run();
-  return streamKey;
+  let limited = false;
+  if (actor && env.TELEGRAM_INGRESS_RATE) {
+    try { limited = !(await env.TELEGRAM_INGRESS_RATE.limit({ key: streamKey })).success; }
+    catch { console.warn('Telegram request limiter unavailable; using the database queue limit'); }
+  }
+  if (!limited) {
+    const accepted = await env.DB.prepare(`INSERT OR IGNORE INTO inbox(update_id,stream_key,payload)
+      SELECT ?,?,? WHERE NOT EXISTS (
+        SELECT 1 FROM telegram_abuse_blocks WHERE stream_key=? AND unblocked_at IS NULL
+      ) AND NOT EXISTS (
+        SELECT 1 FROM inbox INDEXED BY inbox_stream_active WHERE stream_key=? AND status IN ('new','processing')
+        LIMIT 1 OFFSET ?
+      )`).bind(update.update_id, streamKey, JSON.stringify(update), streamKey, streamKey, TELEGRAM_PENDING_LIMIT - 1).run();
+    if (accepted.meta.changes) return streamKey;
+  }
+  if (actor) {
+    try { await inspectTelegramBurst(env, streamKey, update); }
+    catch { console.error('Could not verify the Telegram burst'); }
+  }
+  return null;
 }
 export async function processInbox(env, limit = 1, streamKey = null) {
   const store = new Store(env.DB);
@@ -43,11 +62,12 @@ export async function processInbox(env, limit = 1, streamKey = null) {
       SELECT q.update_id FROM stream_heads h JOIN inbox q ON q.update_id=h.update_id
       WHERE (q.status='new' AND q.available_at<=?) OR (q.status='processing' AND q.lease_until<?)
       ORDER BY ${priority}q.update_id LIMIT 1
-    ) RETURNING *`).bind(...target, at + 90, at, at, ...(fairBatch ? [JSON.stringify([...served])] : [])).first();
+    ) RETURNING *, EXISTS(SELECT 1 FROM telegram_abuse_blocks WHERE stream_key=inbox.stream_key AND unblocked_at IS NULL)
+      AS automatically_blocked`).bind(...target, at + 90, at, at, ...(fairBatch ? [JSON.stringify([...served])] : [])).first();
     if (!job) return;
     if (fairBatch) served.add(job.stream_key);
     try {
-      if (!isBlockedTelegramUser(env, job.stream_key)) {
+      if (!job.automatically_blocked && !isBlockedTelegramUser(env, job.stream_key)) {
         await handleUpdate(JSON.parse(job.payload), env, store);
       }
       await env.DB.prepare("UPDATE inbox SET status='done',processed_at=?,last_error=NULL WHERE update_id=? AND lease_until=?").bind(now(), job.update_id, nowLease(job)).run();

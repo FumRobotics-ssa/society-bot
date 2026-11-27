@@ -263,6 +263,12 @@ async function api(request, env, store, url) {
     return json({ queued: true, id }, 202);
   }
   if (path === '/api/expire' && method === 'POST') { await store.expireOrders(); return json({ ok: true }); }
+  if (path === '/api/telegram-abuse-blocks' && method === 'GET') return json(await store.listTelegramAbuseBlocks(pagination(url)));
+  const blockedAccount = path.match(/^\/api\/telegram-abuse-blocks\/(\d+)$/);
+  if (blockedAccount && method === 'DELETE') {
+    await store.unblockTelegramAbuse(blockedAccount[1], session.user_id);
+    return json({ ok: true });
+  }
   if (path === '/api/backup' && method === 'GET') {
     await store.audit(session.user_id, 'backup.export', 'database', {});
     return download(await exportBackup(env, { includeEventQuestions: true, includeSupport: true }), `robotics-society-${new Date().toISOString().slice(0, 10)}.json`, 'application/json');

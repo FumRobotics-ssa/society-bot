@@ -31,3 +31,19 @@ namespace_id = "9472061843"
 [ratelimits.simple]
 limit = 120
 period = 60
+
+[[ratelimits]]
+name = "TELEGRAM_INGRESS_RATE"
+namespace_id = "9472061844"
+
+[ratelimits.simple]
+limit = 40
+period = 60
+
+[[ratelimits]]
+name = "TELEGRAM_ABUSE_SAMPLE"
+namespace_id = "9472061845"
+
+[ratelimits.simple]
+limit = 3
+period = 60

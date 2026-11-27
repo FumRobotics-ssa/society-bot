@@ -762,6 +762,19 @@ export class Store {
     }
   }
   async listAdmins() { return this.all('SELECT * FROM admins ORDER BY user_id'); }
+  async listTelegramAbuseBlocks({ limit = 50, offset = 0 } = {}) {
+    return this.all(`SELECT stream_key,username,message_count,repeated_count,blocked_at
+      FROM telegram_abuse_blocks WHERE unblocked_at IS NULL
+      ORDER BY blocked_at DESC,stream_key LIMIT ? OFFSET ?`, ...paging(limit, offset));
+  }
+  async unblockTelegramAbuse(userId, actorId) {
+    const streamKey = String(int(userId, 'شناسه تلگرام'));
+    await this.db.batch([
+      this.stmt('UPDATE telegram_abuse_blocks SET unblocked_at=unixepoch() WHERE stream_key=? AND unblocked_at IS NULL', streamKey),
+      this.stmt(`INSERT INTO audit_log(actor_id,action,target,details_json)
+        SELECT ?,'telegram_abuse.unblock',?,'{}' WHERE changes()>0`, int(actorId, 'شناسه مدیر'), streamKey),
+    ]);
+  }
   async getAdmin(userId) { return this.one('SELECT * FROM admins WHERE user_id=?', Number(userId)); }
   async setAdmin(userId, role = 'admin') {
     if (!['admin', 'checkin'].includes(role)) throw domainError('INVALID_INPUT', 'نقش معتبر نیست');

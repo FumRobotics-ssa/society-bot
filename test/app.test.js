@@ -452,6 +452,55 @@ test('blocked Telegram accounts get no processing for messages or callbacks', as
   assert.equal((await store.one("SELECT count(*) AS n FROM outbox WHERE json_extract(payload,'$.chat_id')=?", 42)).n, 0);
 });
 
+test('Telegram ingress caps queued work and blocks repeated bursts after verifying unique, recent messages', async t => {
+  const { db, env, store, request } = fixture();
+  t.after(() => db.close());
+  env.TELEGRAM_ABUSE_SAMPLE = { limit: async () => ({ success: true }) };
+  const now = Math.floor(Date.now() / 1000) - 1;
+  const update = (id, from, text, date = now) => ({
+    update_id: id, message: { date, message_id: id, from: { id: from, username: 'fixture_user' }, chat: { id: from, type: 'private' }, text },
+  });
+  const waiting = async id => (await store.one("SELECT count(*) AS n FROM inbox WHERE stream_key=? AND status='new'", String(id))).n;
+  for (let index = 1; index <= 24; index++) {
+    assert.equal(await receiveUpdate(env, update(index, 1, 'متن متفاوت ' + index)), '1');
+    assert.equal(await receiveUpdate(env, update(100 + index, 2, 'تکراری')), '2');
+    assert.equal(await receiveUpdate(env, update(200 + index, 3, 'پیام مانده نزد تلگرام', now - 300)), '3');
+  }
+  assert.equal(await receiveUpdate(env, update(25, 1, 'یک متن متفاوت دیگر')), null);
+  assert.equal(await waiting(1), 24);
+  assert.equal(await receiveUpdate(env, update(225, 3, 'متن تازه')), null);
+  assert.equal(await waiting(3), 24);
+  assert.equal((await store.listTelegramAbuseBlocks()).length, 0);
+
+  assert.equal(await receiveUpdate(env, update(124, 2, 'تکراری')), null);
+  assert.equal((await store.listTelegramAbuseBlocks()).length, 0);
+  assert.equal(await receiveUpdate(env, update(125, 2, 'تکراری')), null);
+  assert.equal(await waiting(2), 0);
+  const [block] = await store.listTelegramAbuseBlocks();
+  assert.equal(block.stream_key, '2');
+  assert.equal(block.message_count, 24);
+  assert.equal(block.repeated_count, 23);
+  assert.equal(await receiveUpdate(env, update(126, 2, 'متن تازه')), null);
+  assert.equal(await receiveUpdate(env, update(301, 4, 'ثبت‌نام')), '4');
+
+  env.TELEGRAM_INGRESS_RATE = { limit: async () => ({ success: false }) };
+  const preventedCallback = { update_id: 302, callback_query: { from: { id: 4 } } };
+  assert.equal(await receiveUpdate(env, preventedCallback), null);
+  assert.equal((await store.listTelegramAbuseBlocks()).length, 1);
+  assert.equal(await waiting(4), 1);
+  delete env.TELEGRAM_INGRESS_RATE;
+
+  await store.setAdmin(7, 'checkin');
+  const URL = '/api/telegram-abuse-blocks';
+  assert.equal((await request(URL)).status, 401);
+  assert.equal((await request(URL, { headers: { Cookie: await cookie(db, 7) } })).status, 403);
+  const auth = await cookie(db, 99);
+  const response = await request(URL + '/2', { method: 'DELETE', headers: { Origin: env.PUBLIC_URL, Cookie: auth } });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await (await request(URL, { headers: { Cookie: auth } })).json(), []);
+  assert.equal(await receiveUpdate(env, update(127, 2, 'پس از رفع مسدودسازی')), '2');
+});
+
 test('Telegram 429 backs off durable outbox without dropping message', async () => {
   const { db, env, store } = fixture(); await store.enqueue('sendMessage', { chat_id: 1, text: 'hello' }, 'x');
   const original = globalThis.fetch; globalThis.fetch = async () => Response.json({ ok: false, error_code: 429, parameters: { retry_after: 60 } });

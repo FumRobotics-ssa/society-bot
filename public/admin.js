@@ -2,7 +2,7 @@ import { formatEventSchedule, formatJalaliDate, jalaliFirstWeekday, jalaliMonthL
 
 /* Admin credentials live only in an HttpOnly server session; no persistent browser tokens. */
 const $ = (id) => document.getElementById(id);
-const state = { me: null, view: 'overview', events: [], audienceEvents: [], places: [], camera: null, timer: null, loading: 0, pages: { orders: 0, tickets: 0, users: 0, support: 0 } };
+const state = { me: null, view: 'overview', events: [], audienceEvents: [], places: [], camera: null, timer: null, loading: 0, pages: { orders: 0, tickets: 0, users: 0, support: 0, abuseBlocks: 0 } };
 const titles = { overview: 'نمای کلی', events: 'رویدادها', places: 'مکان‌ها', orders: 'بررسی پرداخت‌ها', support: 'تیکت‌های پشتیبانی', tickets: 'بلیت‌ها', checkin: 'ثبت ورود', users: 'شرکت‌کنندگان', broadcast: 'پیام‌رسانی', admins: 'مدیران', settings: 'داده‌ها و پشتیبان' };
 const supportStatuses = { new: 'جدید', in_review: 'در حال بررسی', waiting_user: 'منتظر پاسخ کاربر', closed: 'بسته' };
 const statusNames = { pending: 'در انتظار بررسی', pending_payment: 'در انتظار پرداخت', reserved: 'رزروشده', confirmed: 'تأییدشده', completed: 'تکمیل‌شده', paid: 'پرداخت‌شده', approved: 'تأییدشده', rejected: 'ردشده', cancelled: 'لغوشده', expired: 'منقضی‌شده', attended: 'واردشده', issued: 'صادرشده', valid: 'معتبر', active: 'فعال' };
@@ -624,6 +624,22 @@ async function showAdmins() {
     return [el('span', admin.user_id, 'mono'), roleNames[admin.role] || admin.role, actions];
   }));
 }
+async function showTelegramAbuseBlocks() {
+  const data = await api(query('/api/telegram-abuse-blocks', { limit: 50, offset: state.pages.abuseBlocks * 50 }));
+  const list = $('telegram-abuse-blocks');
+  if (!data.length) empty(list, 'حسابی در این صفحه مسدود نشده است');
+  else table(list, ['حساب تلگرام', 'زمان مسدودسازی', 'پیام‌های بررسی‌شده', 'تکرار', 'مدیریت'], data.map(entry => {
+    const account = entry.username ? `@${entry.username} · ${entry.stream_key}` : entry.stream_key;
+    const release = button('رفع مسدودسازی', async () => {
+      if (!confirm('مسدودسازی خودکار این حساب برداشته شود؟')) return;
+      await api('/api/telegram-abuse-blocks/' + encodeURIComponent(entry.stream_key), { method: 'DELETE' });
+      await showTelegramAbuseBlocks();
+      toast('مسدودسازی برداشته شد');
+    });
+    return [el('span', account, 'mono'), date(entry.blocked_at), number(entry.message_count), number(entry.repeated_count), release];
+  }));
+  if (data.length >= 50 || state.pages.abuseBlocks > 0) pager(list, 'abuseBlocks', data.length);
+}
 async function load() {
   const id = ++state.loading;
   $('loading').hidden = false; $('page-error').hidden = true;
@@ -638,6 +654,7 @@ async function load() {
       case 'tickets': await showTickets(); break;
       case 'users': await showUsers(); break;
       case 'admins': await showAdmins(); break;
+      case 'settings': await showTelegramAbuseBlocks(); break;
     }
   } catch (error) {
     if (id === state.loading) { $('page-error').textContent = error.message; $('page-error').hidden = false; }
