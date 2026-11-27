@@ -287,7 +287,9 @@ async function route(request, env, ctx) {
     if (!env.BOT_TOKEN || !env.WEBHOOK_SECRET || !await safeEqual(request.headers.get('X-Telegram-Bot-Api-Secret-Token'), env.WEBHOOK_SECRET)) return json({ error: 'Forbidden' }, 403);
     const update = await body(request, 262144);
     const streamKey = await receiveUpdate(env, update);
-    ctx.waitUntil(runJobs(env, { streamKey }).catch(() => console.error('Background job failed — inspect durable queue')));
+    if (streamKey !== null) {
+      ctx.waitUntil(runJobs(env, { streamKey }).catch(() => console.error('Background job failed — inspect durable queue')));
+    }
     return json({ ok: true });
   }
   if (url.pathname.startsWith('/api/')) return api(request, env, store, url);

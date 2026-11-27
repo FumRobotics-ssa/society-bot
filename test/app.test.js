@@ -433,6 +433,25 @@ test('webhook rejects absent or incorrect secret and deduplicates durable update
   await receiveUpdate(env, { update_id: 1, message: { from: { id: 2 } } }); await receiveUpdate(env, { update_id: 1, message: { from: { id: 2 } } });
   assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM inbox').first()).n, 1); db.close();
 });
+test('blocked Telegram accounts get no processing for messages or callbacks', async t => {
+  const { db, env, store, request } = fixture();
+  t.after(() => db.close());
+  const message = (update_id, id) => ({ update_id, message: { from: { id }, chat: { id, type: 'private' }, text: '/start' } });
+  await receiveUpdate(env, message(1, 42));
+  env.BLOCKED_TELEGRAM_USER_IDS = '7, 42';
+  const post = update => request('/telegram', {
+    method: 'POST', headers: { 'X-Telegram-Bot-Api-Secret-Token': env.WEBHOOK_SECRET },
+    body: JSON.stringify(update),
+  });
+  assert.equal((await post(message(2, 42))).status, 200);
+  assert.equal((await post({ update_id: 3, callback_query: { from: { id: 42 } } })).status, 200);
+  assert.equal((await post(message(4, 142))).status, 200);
+  assert.deepEqual((await store.all('SELECT update_id FROM inbox ORDER BY update_id')).map(item => item.update_id), [1, 4]);
+  await processInbox(env, 1, '42');
+  assert.equal((await store.one('SELECT status FROM inbox WHERE update_id=1')).status, 'done');
+  assert.equal((await store.one("SELECT count(*) AS n FROM outbox WHERE json_extract(payload,'$.chat_id')=?", 42)).n, 0);
+});
+
 test('Telegram 429 backs off durable outbox without dropping message', async () => {
   const { db, env, store } = fixture(); await store.enqueue('sendMessage', { chat_id: 1, text: 'hello' }, 'x');
   const original = globalThis.fetch; globalThis.fetch = async () => Response.json({ ok: false, error_code: 429, parameters: { retry_after: 60 } });

@@ -12,9 +12,15 @@ function cleanError(error, env) {
   }
   return text;
 }
+function isBlockedTelegramUser(env, id) {
+  return id != null && Boolean(env.BLOCKED_TELEGRAM_USER_IDS?.split(',').some(value => value.trim() === String(id)));
+}
+
 export async function receiveUpdate(env, update) {
   if (!Number.isSafeInteger(update?.update_id)) throw new Error('Invalid update');
-  const streamKey = String(update.callback_query?.from?.id || update.message?.from?.id || update.update_id);
+  const actor = update.callback_query?.from?.id || update.message?.from?.id;
+  if (isBlockedTelegramUser(env, actor)) return null;
+  const streamKey = String(actor || update.update_id);
   await env.DB.prepare('INSERT OR IGNORE INTO inbox(update_id,stream_key,payload) VALUES(?,?,?)').bind(update.update_id, streamKey, JSON.stringify(update)).run();
   return streamKey;
 }
@@ -41,7 +47,9 @@ export async function processInbox(env, limit = 1, streamKey = null) {
     if (!job) return;
     if (fairBatch) served.add(job.stream_key);
     try {
-      await handleUpdate(JSON.parse(job.payload), env, store);
+      if (!isBlockedTelegramUser(env, job.stream_key)) {
+        await handleUpdate(JSON.parse(job.payload), env, store);
+      }
       await env.DB.prepare("UPDATE inbox SET status='done',processed_at=?,last_error=NULL WHERE update_id=? AND lease_until=?").bind(now(), job.update_id, nowLease(job)).run();
     } catch (error) {
       await env.DB.prepare('UPDATE inbox SET status=?,available_at=?,last_error=? WHERE update_id=? AND lease_until=?')
