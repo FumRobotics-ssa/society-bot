@@ -127,19 +127,21 @@ async function broadcast(job, env) {
   if (statements.length) await env.DB.batch(statements);
 }
 const posterFileIds = new Map();
-const posterWork = "method='sendPhoto' AND COALESCE(dedupe_key,'') LIKE 'update:%:photo'";
+const posterWork = "method='editMessageMedia' OR (method='sendPhoto' AND COALESCE(dedupe_key,'') LIKE 'update:%:photo')";
 
 async function telegram(method, data, env, timeout) {
   if (!/^[A-Za-z]+$/.test(method)) throw new Error('Unknown Telegram method');
-  const { _documentText, filename, _eventPosterId, _fallbackToText, _optionalPoster, ...fields } = data;
+  const { _documentText, filename, _eventPosterId, _fallbackToText, _optionalPoster, _attachPoster, ...fields } = data;
   let poster;
   if (_eventPosterId) {
     const stored = await env.DB.prepare('SELECT poster_url FROM events WHERE id=?').bind(_eventPosterId).first('poster_url');
     const cached = posterFileIds.get(_eventPosterId);
     if (cached && cached.source === stored && cached.botToken === env.BOT_TOKEN) {
       try {
-        await sendTelegram(method, env, timeout, JSON.stringify({ ...fields, photo: cached.fileId }), { 'Content-Type': 'application/json' });
-        return;
+        const cachedFields = method === 'editMessageMedia'
+          ? { ...fields, media: { ...fields.media, media: cached.fileId } }
+          : { ...fields, photo: cached.fileId };
+        return await sendTelegram(method, env, timeout, JSON.stringify(cachedFields), { 'Content-Type': 'application/json' });
       } catch (error) {
         if (!error.invalidPhoto || !/file (?:identifier|reference)|file_id/i.test(error.message)) throw error;
         posterFileIds.delete(_eventPosterId);
@@ -152,7 +154,9 @@ async function telegram(method, data, env, timeout) {
       throw error;
     }
     const mime = match[1].toLowerCase();
-    poster = { source: stored, file: new Blob([Uint8Array.from(atob(match[2]), byte => byte.charCodeAt(0))], { type: mime }) };
+    let bytes = Uint8Array.from(atob(match[2]), byte => byte.charCodeAt(0));
+    if (mime === 'image/jpeg' && env.PREPARE_EVENT_POSTER) bytes = env.PREPARE_EVENT_POSTER(bytes);
+    poster = { source: stored, file: new Blob([bytes], { type: mime }) };
   }
   let body, headers;
   if (_documentText !== undefined || poster) {
@@ -169,23 +173,25 @@ async function telegram(method, data, env, timeout) {
     }
     posterFileIds.set(_eventPosterId, { source: poster.source, botToken: env.BOT_TOKEN, fileId });
   }
+  return result;
 }
 
 async function sendTelegram(method, env, timeout, body, headers) {
   const response = await telegramFetch(env, method, { method: 'POST', headers, body, signal: AbortSignal.timeout(timeout) });
   const result = await response.json();
   if (!result.ok) {
+    if (method === 'editMessageMedia' && result.error_code === 400 && /message is not modified/i.test(result.description || '')) return;
     const error = new Error(`Telegram ${result.error_code || response.status}: ${result.description || 'request failed'}`);
     error.retryAfter = result.parameters?.retry_after;
     error.safeToRetry = result.error_code === 429;
     error.permanent = [400, 403, 404].includes(result.error_code);
-    error.invalidPhoto = method === 'sendPhoto' && result.error_code === 400;
+    error.invalidPhoto = ['sendPhoto','editMessageMedia'].includes(method) && result.error_code === 400;
     throw error;
   }
   return result.result;
 }
 const outboxLanes = {
-  interactive: "AND method NOT IN ('sendPhoto','sendDocument','__broadcast','__backup') AND (dedupe_key IS NULL OR dedupe_key NOT LIKE '%:user:%')",
+  interactive: "AND method NOT IN ('sendPhoto','sendDocument','editMessageMedia','__broadcast','__backup') AND (dedupe_key IS NULL OR dedupe_key NOT LIKE '%:user:%')",
   media: `AND method IN ('sendPhoto','sendDocument') AND NOT (${posterWork})`,
   poster: `AND (${posterWork})`,
   bulk: "AND (method IN ('__broadcast','__backup') OR (method='sendMessage' AND dedupe_key LIKE '%:user:%'))",
@@ -216,6 +222,7 @@ export async function processOutbox(env, limit = 8, lane = null) {
     if (!job) return;
     if (job.status === 'failed') continue;
     const receiptDelivery = job.dedupe_key?.startsWith('receipt:') && ['sendPhoto', 'sendDocument'].includes(job.method);
+    const editingPoster = job.method === 'editMessageMedia';
     let payload;
     try {
       if (job.method === '__broadcast') await broadcast(job, env);
@@ -229,15 +236,31 @@ export async function processOutbox(env, limit = 8, lane = null) {
         }
       } else {
         payload = JSON.parse(job.payload);
-        if (payload._optionalPoster && now() - job.created_at > 120) throw new Error('Optional event poster expired');
-        const timeout = receiptDelivery || payload._optionalPoster ? 25000 : payload._fallbackToText ? 6000 : 10000;
-        await telegram(job.method, payload, env, timeout);
+        if ((editingPoster || payload._optionalPoster) && now() - job.created_at > 120) {
+          const error = new Error('Event poster job expired');
+          error.permanent = true;
+          throw error;
+        }
+        const timeout = receiptDelivery || editingPoster || payload._optionalPoster ? 25000 : payload._fallbackToText ? 6000 : 10000;
+        const result = await telegram(job.method, payload, env, timeout);
+        if (job.method === 'sendMessage' && payload._attachPoster && Number.isSafeInteger(result?.message_id)) {
+          const { photo, _eventPosterId } = payload._attachPoster;
+          const edit = {
+            chat_id: payload.chat_id, message_id: result.message_id, _eventPosterId,
+            media: { type: 'photo', media: photo || 'attach://photo', caption: payload.text },
+            reply_markup: payload.reply_markup,
+          };
+          await env.DB.prepare(`UPDATE outbox SET method='editMessageMedia',payload=?,status='pending',
+            attempts=0,available_at=?,lease_until=0,last_error=NULL WHERE id=? AND lease_until=?`)
+            .bind(JSON.stringify(edit), now(), job.id, job.lease_until).run();
+          continue;
+        }
       }
       await env.DB.prepare("UPDATE outbox SET status='sent',sent_at=?,last_error=NULL WHERE id=? AND lease_until=?").bind(now(), job.id, job.lease_until).run();
     } catch (error) {
       const uncertainReceipt = receiptDelivery && !error.permanent && !error.safeToRetry;
       const posterRetryExhausted = payload?._optionalPoster && (!error.safeToRetry || job.attempts >= 2);
-      const failed = uncertainReceipt || error.permanent || posterRetryExhausted || job.attempts >= 10;
+      const failed = uncertainReceipt || error.permanent || posterRetryExhausted || job.attempts >= (editingPoster ? 3 : 10);
       if (job.method === 'sendPhoto' && payload?._fallbackToText && (error.invalidPhoto || (!error.permanent && !error.safeToRetry))) {
         const { chat_id, caption: text, reply_markup } = payload;
         await env.DB.prepare(`UPDATE outbox SET method='sendMessage',payload=?,status='pending',
