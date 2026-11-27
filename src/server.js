@@ -88,6 +88,7 @@ const workInterval = setInterval(() => {
   runLane('inbox', () => processInbox(env, 8));
   runLane('interactive', () => processOutbox(env, 4, 'interactive'));
   runLane('media', () => processOutbox(env, 1, 'media'));
+  runLane('poster', () => processOutbox(env, 1, 'poster'));
   runLane('bulk', () => processOutbox(env, 1, 'bulk'));
 }, 500);
 const maintenanceInterval = setInterval(() => runLane('maintenance', async () => {
