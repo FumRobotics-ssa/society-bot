@@ -2,11 +2,23 @@ import { Store } from './store.js';
 import { handleUpdate, notifyOrder } from './bot.js';
 import { now } from './auth.js';
 import { runBackup } from './backup.js';
-import { inspectTelegramBurst, TELEGRAM_PENDING_LIMIT } from './telegram-ingress.js';
+import { criticalTelegramUpdate, inspectTelegramBurst, TELEGRAM_PENDING_LIMIT } from './telegram-ingress.js';
 import { telegramFetch } from './telegram-api.js';
 
 const changes = result => result.meta?.changes || 0;
 const receiptDeliveryUnconfirmed = 'Receipt delivery unconfirmed. Review the receipt in the admin panel.';
+const criticalInboxReserve = 32;
+const criticalStreamReserve = 2;
+const outboxSoftLimit = 1024;
+const activeOutbox = "status IN ('pending','processing')";
+const outboxHasRoom = "NOT EXISTS (SELECT 1 FROM queue_control WHERE name='outbox' AND paused=1)";
+export const outboxMetricsQuery = `SELECT COUNT(*) AS depth,COALESCE(unixepoch()-MIN(created_at),0) AS age
+  FROM (SELECT created_at FROM outbox INDEXED BY outbox_active WHERE ${activeOutbox} ORDER BY created_at LIMIT ${outboxSoftLimit})`;
+
+export async function refreshOutboxPressure(env, depth) {
+  const paused = Number(depth >= outboxSoftLimit);
+  await env.DB.prepare("UPDATE queue_control SET paused=? WHERE name='outbox' AND paused<>?").bind(paused, paused).run();
+}
 function cleanError(error, env) {
   let text = String(error?.message || 'job failed').slice(0, 500);
   for (const key of ['BOT_TOKEN', 'WEBHOOK_SECRET', 'S3_SECRET_ACCESS_KEY', 'S3_ACCESS_KEY_ID']) {
@@ -26,13 +38,14 @@ export async function receiveUpdate(env, update) {
     return null;
   }
   const streamKey = String(actor || update.update_id);
+  const critical = await criticalTelegramUpdate(env, update, actor);
   let limited = false;
-  if (actor && env.TELEGRAM_INGRESS_RATE) {
+  if (!critical && actor && env.TELEGRAM_INGRESS_RATE) {
     try { limited = !(await env.TELEGRAM_INGRESS_RATE.limit({ key: streamKey })).success; }
     catch { console.warn('Telegram request limiter unavailable; using the database queue limit'); }
   }
   if (!limited) {
-    if (env.TELEGRAM_GLOBAL_RATE) {
+    if (!critical && env.TELEGRAM_GLOBAL_RATE) {
       try {
         if (!(await env.TELEGRAM_GLOBAL_RATE.limit({ key: 'telegram' })).success) {
           env.RECORD_QUEUE_EVENT?.('global_rate_limited');
@@ -46,15 +59,31 @@ export async function receiveUpdate(env, update) {
     const globalGuard = env.INBOX_CAPACITY ? `AND NOT EXISTS (
         SELECT 1 FROM inbox INDEXED BY inbox_stream_active WHERE status IN ('new','processing') LIMIT 1 OFFSET ?
       )` : '';
-    const accepted = await env.DB.prepare(`INSERT OR IGNORE INTO inbox(update_id,stream_key,payload)
-      SELECT ?,?,? WHERE NOT EXISTS (
+    const criticalGuard = critical ? `AND NOT EXISTS (
+        SELECT 1 FROM inbox INDEXED BY inbox_stream_active WHERE stream_key=? AND status IN ('new','processing')
+        AND priority=1 LIMIT 1 OFFSET ${criticalStreamReserve - 1}
+      )` : '';
+    const accepted = await env.DB.prepare(`INSERT OR IGNORE INTO inbox(update_id,stream_key,payload,priority)
+      SELECT ?,?,?,? WHERE NOT EXISTS (
         SELECT 1 FROM telegram_abuse_blocks WHERE stream_key=? AND unblocked_at IS NULL
       ) AND NOT EXISTS (
         SELECT 1 FROM inbox INDEXED BY inbox_stream_active WHERE stream_key=? AND status IN ('new','processing')
         LIMIT 1 OFFSET ?
-      ) ${globalGuard}`).bind(update.update_id, streamKey, JSON.stringify(update), streamKey, streamKey,
-        TELEGRAM_PENDING_LIMIT - 1, ...(env.INBOX_CAPACITY ? [env.INBOX_CAPACITY - 1] : [])).run();
+      ) ${globalGuard} ${criticalGuard}`).bind(update.update_id, streamKey, JSON.stringify(update), Number(critical), streamKey, streamKey,
+        TELEGRAM_PENDING_LIMIT - 1 + (critical ? criticalStreamReserve : 0),
+        ...(env.INBOX_CAPACITY ? [env.INBOX_CAPACITY - 1 + (critical ? criticalInboxReserve : 0)] : []),
+        ...(critical ? [streamKey] : [])).run();
     if (accepted.meta.changes) return streamKey;
+  }
+  if (critical) {
+    const acknowledged = await env.DB.prepare(`SELECT 1 FROM inbox WHERE update_id=? UNION ALL
+      SELECT 1 FROM telegram_abuse_blocks WHERE stream_key=? AND unblocked_at IS NULL LIMIT 1`)
+      .bind(update.update_id, streamKey).first();
+    if (acknowledged) return null;
+    env.RECORD_QUEUE_EVENT?.('critical_ingress_retry');
+    const error = new Error('Telegram inbox temporarily busy');
+    error.httpStatus = 503;
+    throw error;
   }
   env.RECORD_QUEUE_EVENT?.(limited ? 'rate_limited' : 'not_enqueued');
   if (actor) {
@@ -76,6 +105,7 @@ export async function processInbox(env, limit = 1, streamKey = null) {
   const concurrencyGuard = env.INBOX_CONCURRENCY ? `AND (
     SELECT COUNT(*) FROM inbox WHERE status='processing' AND lease_until>=?
   ) < ?` : '';
+  const backpressure = env.OUTBOX_BACKPRESSURE ? `AND (q.priority=1 OR ${outboxHasRoom})` : '';
   for (let i = 0; i < limit && !env.JOBS_STOPPING?.(); i++) {
     const at = now();
     // Find each stream's head using only active rows. A head in backoff still blocks later updates.
@@ -83,8 +113,8 @@ export async function processInbox(env, limit = 1, streamKey = null) {
     UPDATE inbox SET status='processing',lease_until=?,attempts=attempts+1
     WHERE update_id=(
       SELECT q.update_id FROM stream_heads h JOIN inbox q ON q.update_id=h.update_id
-      WHERE (q.status='new' AND q.available_at<=?) OR (q.status='processing' AND q.lease_until<?)
-      ORDER BY ${priority}q.update_id LIMIT 1
+      WHERE ((q.status='new' AND q.available_at<=?) OR (q.status='processing' AND q.lease_until<?)) ${backpressure}
+      ORDER BY q.priority DESC,${priority}q.update_id LIMIT 1
     ) ${concurrencyGuard} RETURNING *, EXISTS(SELECT 1 FROM telegram_abuse_blocks WHERE stream_key=inbox.stream_key AND unblocked_at IS NULL)
       AS automatically_blocked`).bind(...target, at + 90, at, at, ...(fairBatch ? [JSON.stringify([...served])] : []),
       ...(env.INBOX_CONCURRENCY ? [at, env.INBOX_CONCURRENCY] : [])).first();
@@ -127,7 +157,6 @@ async function broadcast(job, env) {
   if (statements.length) await env.DB.batch(statements);
 }
 const posterFileIds = new Map();
-const posterWork = "method='editMessageMedia' OR (method='sendPhoto' AND COALESCE(dedupe_key,'') LIKE 'update:%:photo')";
 
 async function telegram(method, data, env, timeout) {
   if (!/^[A-Za-z]+$/.test(method)) throw new Error('Unknown Telegram method');
@@ -190,35 +219,45 @@ async function sendTelegram(method, env, timeout, body, headers) {
   }
   return result.result;
 }
-const outboxLanes = {
-  interactive: "AND method NOT IN ('sendPhoto','sendDocument','editMessageMedia','__broadcast','__backup') AND (dedupe_key IS NULL OR dedupe_key NOT LIKE '%:user:%')",
-  media: `AND method IN ('sendPhoto','sendDocument') AND NOT (${posterWork})`,
-  poster: `AND (${posterWork})`,
-  bulk: "AND (method IN ('__broadcast','__backup') OR (method='sendMessage' AND dedupe_key LIKE '%:user:%'))",
-};
+const outboxLanes = new Set(['interactive', 'media', 'poster', 'bulk']);
 
 export async function processOutbox(env, limit = 8, lane = null) {
-  const laneFilter = lane === null ? '' : outboxLanes[lane];
-  if (laneFilter === undefined) throw new Error('Unknown outbox lane');
+  if (lane !== null && !outboxLanes.has(lane)) throw new Error('Unknown outbox lane');
+  const laneFilter = lane === null ? '' : 'AND queue_lane=?';
+  const laneArgs = lane === null ? [] : [lane];
+  const pendingIndex = lane === null ? '' : 'INDEXED BY outbox_ready_lane';
+  const processingIndex = lane === null ? '' : 'INDEXED BY outbox_processing_lane';
   const concurrencyGuard = env.OUTBOX_LANE_CONCURRENCY ? `AND (
-    SELECT COUNT(*) FROM outbox WHERE status='processing' AND lease_until>=? ${laneFilter}
+    SELECT COUNT(*) FROM outbox ${processingIndex} WHERE status='processing' AND lease_until>=? ${laneFilter}
   ) < ?` : '';
+  const backpressure = env.OUTBOX_BACKPRESSURE && (lane === null || lane === 'bulk')
+    ? `AND (method<>'__broadcast' OR ${outboxHasRoom})` : '';
   for (let i = 0; i < limit && !env.JOBS_STOPPING?.(); i++) {
     const at = now();
     // A timed-out receipt send or an expired send lease may already have posted the media.
-    const job = await env.DB.prepare(`WITH next_job AS MATERIALIZED (
+    const job = await env.DB.prepare(`WITH pending AS (
+      SELECT id,available_at,created_at FROM outbox ${pendingIndex}
+      WHERE status='pending' AND available_at<=? ${laneFilter} ${backpressure}
+      ORDER BY available_at,created_at,id LIMIT 1
+    ), expired AS (
+      SELECT id,available_at,created_at FROM outbox ${processingIndex}
+      WHERE status='processing' AND lease_until<? ${laneFilter} ${backpressure}
+      ORDER BY available_at,created_at,id LIMIT 1
+    ), candidate AS (
+      SELECT * FROM pending UNION ALL SELECT * FROM expired ORDER BY available_at,created_at,id LIMIT 1
+    ), next_job AS MATERIALIZED (
       SELECT id, method IN ('sendPhoto','sendDocument') AND COALESCE(dedupe_key,'') LIKE 'receipt:%'
         AND (status='processing' OR (last_error IS NOT NULL AND last_error NOT LIKE 'Telegram 429:%')) AS uncertain_receipt
-      FROM outbox WHERE ((status='pending' AND available_at<=?) OR (status='processing' AND lease_until<?)) ${laneFilter}
-      ORDER BY available_at,created_at LIMIT 1
+      FROM outbox WHERE id=(SELECT id FROM candidate)
     )
     UPDATE outbox SET
       status=CASE WHEN next_job.uncertain_receipt THEN 'failed' ELSE 'processing' END,
       lease_until=CASE WHEN next_job.uncertain_receipt THEN 0 ELSE ? END,
       attempts=attempts + (NOT next_job.uncertain_receipt),
       last_error=CASE WHEN next_job.uncertain_receipt THEN ? ELSE last_error END
-    FROM next_job WHERE outbox.id=next_job.id ${concurrencyGuard} RETURNING *`).bind(at, at, at + 90, receiptDeliveryUnconfirmed,
-      ...(env.OUTBOX_LANE_CONCURRENCY ? [at, env.OUTBOX_LANE_CONCURRENCY] : [])).first();
+    FROM next_job WHERE outbox.id=next_job.id ${concurrencyGuard} RETURNING *`)
+      .bind(at, ...laneArgs, at, ...laneArgs, at + 90, receiptDeliveryUnconfirmed,
+        ...(env.OUTBOX_LANE_CONCURRENCY ? [at, ...laneArgs, env.OUTBOX_LANE_CONCURRENCY] : [])).first();
     if (!job) return;
     if (job.status === 'failed') continue;
     const receiptDelivery = job.dedupe_key?.startsWith('receipt:') && ['sendPhoto', 'sendDocument'].includes(job.method);
@@ -281,8 +320,16 @@ export async function maintenance(env, at = new Date()) {
   await env.DB.batch([
     env.DB.prepare('DELETE FROM login_codes WHERE expires_at<?').bind(now()),
     env.DB.prepare('DELETE FROM admin_sessions WHERE expires_at<?').bind(now()),
-    env.DB.prepare("DELETE FROM inbox INDEXED BY inbox_retention WHERE status='done' AND processed_at<?").bind(now() - 7 * 86400),
-    env.DB.prepare("DELETE FROM outbox INDEXED BY outbox_retention WHERE status='sent' AND sent_at<?").bind(now() - 7 * 86400),
+    env.DB.prepare(`DELETE FROM inbox WHERE update_id IN (SELECT update_id FROM inbox INDEXED BY inbox_retention
+      WHERE status='done' AND processed_at<? ORDER BY processed_at LIMIT 150)`).bind(now() - 7 * 86400),
+    env.DB.prepare(`DELETE FROM outbox WHERE id IN (SELECT id FROM outbox INDEXED BY outbox_retention
+      WHERE status='sent' AND sent_at<? ORDER BY sent_at LIMIT 150)`).bind(now() - 7 * 86400),
+    env.DB.prepare(`DELETE FROM inbox WHERE update_id IN (SELECT update_id FROM inbox INDEXED BY inbox_failed_retention
+      WHERE status='failed' AND created_at<? ORDER BY created_at LIMIT 60)`).bind(now() - 30 * 86400),
+    env.DB.prepare(`DELETE FROM outbox WHERE id IN (SELECT id FROM outbox INDEXED BY outbox_failed_retention
+      WHERE status='failed' AND created_at<? AND (dedupe_key IS NULL OR (dedupe_key NOT LIKE 'receipt:%'
+        AND dedupe_key NOT LIKE 'late-payment:%' AND dedupe_key NOT LIKE 'support-reply:%'))
+      ORDER BY created_at LIMIT 60)`).bind(now() - 30 * 86400),
   ]);
   // Queue once per UTC day on the first cron run, even if the midnight run was delayed.
   if (env.BACKUP_CHAT || env.S3_BUCKET) {

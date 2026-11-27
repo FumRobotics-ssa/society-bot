@@ -1,5 +1,5 @@
 import { handleRequest } from './app.js';
-import { runJobs } from './jobs.js';
+import { outboxMetricsQuery, refreshOutboxPressure, runJobs } from './jobs.js';
 import arvanRelay from '../ops/cloudflare/arvan-relay.js';
 
 const posterPath = /^\/api\/events\/\d+\/poster$/;
@@ -8,6 +8,7 @@ const queueEnv = env => ({
   INBOX_CAPACITY: 256,
   INBOX_CONCURRENCY: 1,
   OUTBOX_LANE_CONCURRENCY: 1,
+  OUTBOX_BACKPRESSURE: true,
   QUEUE_LANES: true,
   RECORD_QUEUE_EVENT(reason) { console.warn(JSON.stringify({ event: 'queue_rejection', reason })); },
 });
@@ -15,9 +16,10 @@ const queueEnv = env => ({
 async function scheduledJobs(env) {
   const [inbox, outbox] = await env.DB.batch([
     env.DB.prepare("SELECT count(*) AS depth,COALESCE(unixepoch()-MIN(created_at),0) AS age FROM inbox WHERE status IN ('new','processing')"),
-    env.DB.prepare("SELECT count(*) AS depth,COALESCE(unixepoch()-MIN(created_at),0) AS age FROM outbox WHERE status IN ('pending','processing')"),
+    env.DB.prepare(outboxMetricsQuery),
   ]);
   const incoming = inbox.results[0], outgoing = outbox.results[0];
+  await refreshOutboxPressure(env, outgoing.depth);
   const alert = incoming.depth >= 128 || incoming.age >= 60 || outgoing.age >= 120;
   (alert ? console.warn : console.info)(JSON.stringify({ event: 'queue_metrics', alert, inbox: incoming, outbox: outgoing }));
   await runJobs(queueEnv(env), { maintenance: true, inboxLimit: 8 });

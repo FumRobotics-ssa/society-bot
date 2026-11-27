@@ -3,6 +3,7 @@ import { displayName, neshanUrl, SUPPORT_CONTACT, SUPPORT_STATUSES } from './sto
 import { configuredStudentNumberLength, isFumStudent, isValidStudentNumber, normalizeStudentNumber, pricingGroupLabel } from './pricing.js';
 import { formatEventSchedule } from '../public/jalali.js';
 import { telegramFetch } from './telegram-api.js';
+import { telegramReceipt } from './telegram-ingress.js';
 
 const FA_DIGITS = '۰۱۲۳۴۵۶۷۸۹';
 const AR_DIGITS = '٠١٢٣٤٥٦٧٨٩';
@@ -638,13 +639,12 @@ export async function handleUpdate(update, env, store) {
           return send('برای ادامه، در پیام خلاصهٔ سفارش «تأیید و رزرو» یا «انصراف» را بزنید.');
         }
         if (state.step === 'payment_receipt') {
-          const photo = message.photo?.at(-1);
-          const document = message.document;
-          if (!photo && (!document || !['image/jpeg', 'image/png', 'image/webp', 'application/pdf'].includes(document.mime_type))) return send('📎 رسید را به‌صورت عکس یا فایل PDF بفرستید.');
-          if ((photo?.file_size || document?.file_size || 0) > 10 * 1024 * 1024) return send('حجم فایل بیشتر از ۱۰ مگابایت است. نسخهٔ کم‌حجم‌تری از رسید بفرستید.');
+          const receipt = telegramReceipt(message);
+          if (!receipt) return send('📎 رسید را به‌صورت عکس یا فایل PDF بفرستید.');
+          if ((receipt.file.file_size || 0) > 10 * 1024 * 1024) return send('حجم فایل بیشتر از ۱۰ مگابایت است. نسخهٔ کم‌حجم‌تری از رسید بفرستید.');
           if (!env.VERIFICATION_CHAT) return send(`ℹ️ بررسی پرداخت فعلاً در دسترس نیست.\n\n${SUPPORT_CONTACT}`);
-          const receiptType = photo ? 'photo' : 'document';
-          const order = await store.submitReceipt(data.order_id, from.id, photo?.file_id || document.file_id, receiptType, `${updateKey}:receipt`);
+          const { file, type } = receipt;
+          const order = await store.submitReceipt(data.order_id, from.id, file.file_id, type, `${updateKey}:receipt`);
           const previousTickets = await store.countApprovedTickets(from.id, order.event_id);
           const receiptCaption = paragraphs('🧾 رسید در انتظار بررسی', [
             `کد سفارش: ${order.id}`,
@@ -661,7 +661,7 @@ export async function handleUpdate(update, env, store) {
             `مبلغ هر بلیت مورد انتظار: ${money(order.unit_price)} تومان`,
             `مبلغ کل مورد انتظار: ${money(Number(order.unit_price) * Number(order.quantity))} تومان`,
           ].join('\n'));
-          await store.enqueue(photo ? 'sendPhoto' : 'sendDocument', { chat_id: env.VERIFICATION_CHAT, [photo ? 'photo' : 'document']: order.receipt_file_id, caption: receiptCaption.slice(0, 1000), reply_markup: { inline_keyboard: [[{ text: 'تأیید پرداخت', callback_data: `r:${order.id}:y` }, { text: 'رد درخواست', callback_data: `r:${order.id}:n` }]] } }, `receipt:${order.id}:${order.receipt_file_id}`);
+          await store.enqueue(type === 'photo' ? 'sendPhoto' : 'sendDocument', { chat_id: env.VERIFICATION_CHAT, [type]: order.receipt_file_id, caption: receiptCaption.slice(0, 1000), reply_markup: { inline_keyboard: [[{ text: 'تأیید پرداخت', callback_data: `r:${order.id}:y` }, { text: 'رد درخواست', callback_data: `r:${order.id}:n` }]] } }, `receipt:${order.id}:${order.receipt_file_id}`);
           await send('📨 رسید شما برای بررسی فرستاده شد.\n\nنتیجه را همین‌جا به شما اطلاع می‌دهیم.', MENU);
           await store.setState(from.id, 'idle', { last_update_id: update.update_id });
           return;

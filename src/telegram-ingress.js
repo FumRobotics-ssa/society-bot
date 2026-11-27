@@ -1,6 +1,32 @@
 import { now, ownerIds } from './auth.js';
 
 export const TELEGRAM_PENDING_LIMIT = 24;
+const receiptTypes = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+
+export function telegramReceipt(message) {
+  const photo = Array.isArray(message?.photo) ? message.photo.at(-1) : null;
+  if (photo) return { file: photo, type: 'photo' };
+  const document = message?.document;
+  if (receiptTypes.includes(document?.mime_type)) return { file: document, type: 'document' };
+  return null;
+}
+
+export async function criticalTelegramUpdate(env, update, actor) {
+  const chat = update.callback_query?.message?.chat ?? update.message?.chat;
+  if (!Number.isSafeInteger(actor) || chat?.type !== 'private' || chat.id !== actor) return false;
+  const confirmation = /^rq:y:([a-f0-9]{12})$/.exec(update.callback_query?.data || '');
+  if (confirmation) {
+    return Boolean(await env.DB.prepare(`SELECT 1 FROM conversation_states
+      WHERE user_id=? AND step='reserve_confirm' AND json_extract(data_json,'$.quote_nonce')=?`)
+      .bind(actor, confirmation[1]).first());
+  }
+  const receipt = telegramReceipt(update.message);
+  if (!env.VERIFICATION_CHAT || !receipt?.file.file_id || (receipt.file.file_size || 0) > 10 * 1024 * 1024) return false;
+  return Boolean(await env.DB.prepare(`SELECT 1 FROM conversation_states s JOIN orders o
+    ON o.id=json_extract(s.data_json,'$.order_id') AND o.user_id=s.user_id
+    WHERE s.user_id=? AND s.step='payment_receipt' AND o.status='reserved' AND o.expires_at>unixepoch()`)
+    .bind(actor).first());
+}
 const SPAM_WINDOW = 60;
 const MIN_SPAM_MESSAGES = 20;
 const MIN_REPEATS = 12;

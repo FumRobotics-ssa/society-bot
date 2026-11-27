@@ -5,7 +5,7 @@ import { resolve, dirname, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDatabase } from './sqlite.js';
 import { handleRequest } from './app.js';
-import { maintenance, processInbox, processOutbox } from './jobs.js';
+import { maintenance, outboxMetricsQuery, processInbox, processOutbox, refreshOutboxPressure } from './jobs.js';
 import { prepareEventPoster } from './poster-jpeg.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -54,6 +54,7 @@ const env = {
   DEFER_TELEGRAM_JOBS: true,
   PREPARE_EVENT_POSTER: prepareEventPoster,
   INBOX_CAPACITY: 256,
+  OUTBOX_BACKPRESSURE: true,
   JOBS_STOPPING: () => stopping,
   RECORD_QUEUE_EVENT: name => { counters[name] = (counters[name] || 0) + 1; },
   CHECKIN_RATE_LIMITER: minuteLimiter(120),
@@ -95,7 +96,8 @@ const workInterval = setInterval(() => {
 }, 500);
 const maintenanceInterval = setInterval(() => runLane('maintenance', async () => {
   const inbox = await db.prepare("SELECT count(*) AS depth, COALESCE(unixepoch()-MIN(created_at),0) AS age FROM inbox WHERE status IN ('new','processing')").first();
-  const outbox = await db.prepare("SELECT count(*) AS depth, COALESCE(unixepoch()-MIN(created_at),0) AS age FROM outbox WHERE status IN ('pending','processing')").first();
+  const outbox = await db.prepare(outboxMetricsQuery).first();
+  await refreshOutboxPressure(env, outbox.depth);
   const alert = inbox.depth >= 128 || inbox.age >= 60 || outbox.age >= 120 ||
     Object.values(counters).some(count => count >= 10) || Boolean(counters.reservation_limit);
   const metrics = { event: 'queue_metrics', alert, inbox, outbox, ...counters };
