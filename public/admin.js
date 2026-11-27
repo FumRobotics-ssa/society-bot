@@ -2,7 +2,7 @@ import { formatEventSchedule, formatJalaliDate, jalaliFirstWeekday, jalaliMonthL
 
 /* Admin credentials live only in an HttpOnly server session; no persistent browser tokens. */
 const $ = (id) => document.getElementById(id);
-const state = { me: null, view: 'overview', events: [], audienceEvents: [], places: [], camera: null, timer: null, loading: 0, pages: { orders: 0, tickets: 0, users: 0, support: 0 } };
+const state = { me: null, view: 'overview', events: [], audienceEvents: [], places: [], camera: null, timer: null, loading: 0, pages: { orders: 0, tickets: 0, users: 0, support: 0, abuseBlocks: 0 } };
 const titles = { overview: 'نمای کلی', events: 'رویدادها', places: 'مکان‌ها', orders: 'بررسی پرداخت‌ها', support: 'تیکت‌های پشتیبانی', tickets: 'بلیت‌ها', checkin: 'ثبت ورود', users: 'شرکت‌کنندگان', broadcast: 'پیام‌رسانی', admins: 'مدیران', settings: 'داده‌ها و پشتیبان' };
 const supportStatuses = { new: 'جدید', in_review: 'در حال بررسی', waiting_user: 'منتظر پاسخ کاربر', closed: 'بسته' };
 const statusNames = { pending: 'در انتظار بررسی', pending_payment: 'در انتظار پرداخت', reserved: 'رزروشده', confirmed: 'تأییدشده', completed: 'تکمیل‌شده', paid: 'پرداخت‌شده', approved: 'تأییدشده', rejected: 'ردشده', cancelled: 'لغوشده', expired: 'منقضی‌شده', attended: 'واردشده', issued: 'صادرشده', valid: 'معتبر', active: 'فعال' };
@@ -232,8 +232,15 @@ function fillFilters() {
   document.querySelectorAll('.audience-event-filter').forEach((select) => {
     const previous = select.value;
     const participantsFilter = select.id === 'users-event';
-    const option = el('option', select.dataset.allLabel || 'همه رویدادها'); option.value = '';
-    select.replaceChildren(option);
+    const placeholder = select.dataset.placeholder;
+    const all = new Option(select.dataset.allLabel || 'همه رویدادها', placeholder ? 'all' : '');
+    if (placeholder) {
+      const prompt = new Option(placeholder, '', true, true);
+      prompt.disabled = true;
+      select.replaceChildren(prompt, all);
+    } else {
+      select.replaceChildren(all);
+    }
     if (participantsFilter) {
       const noEvent = el('option', 'بدون سابقهٔ شرکت در رویداد');
       noEvent.value = 'no-event'; select.append(noEvent);
@@ -244,7 +251,7 @@ function fillFilters() {
       const item = el('option', `${event.name} · ${number(event.participant_count)} نفر${oldLabel}`);
       item.value = event.audience_key; select.append(item);
     });
-    if (participantsFilter && previous === 'no-event') select.value = previous;
+    if (previous === all.value || (participantsFilter && previous === 'no-event')) select.value = previous;
     else if (visibleEvents.some((event) => event.audience_key === previous)) select.value = previous;
   });
   const select = $('event-place'); const old = select.value;
@@ -453,6 +460,7 @@ function editEvent(event = null, { copy = false } = {}) {
   form.elements.namedItem('id').value = copy ? '' : event?.id || '';
   $('event-form-title').textContent = copy ? 'پیش‌نویس رویداد جدید' : event ? 'ویرایش رویداد' : 'رویداد جدید';
   ['name', 'description', 'place_id', 'capacity', 'max_per_user', 'price', 'payment_instructions'].forEach((key) => { form.elements.namedItem(key).value = event?.[key] ?? (key === 'max_per_user' ? 1 : key === 'price' ? 0 : ''); });
+  form.elements.namedItem('pending_booking_limit').value = event?.pending_booking_limit ?? '';
   form.elements.namedItem('pricing_mode').value = event?.pricing_mode || 'fixed';
   form.elements.namedItem('public_price').value = event?.price ?? 0;
   form.elements.namedItem('fum_student_price').value = event?.fum_student_price ?? 0;
@@ -508,6 +516,7 @@ async function showOrders() {
   const tariff = order => order.pricing_group === 'fum_student' ? 'فردوسی (خوداظهاری)' : order.pricing_group === 'general' ? 'عموم' : 'یکسان برای همه';
   table($('orders-list'), ['سفارش', 'شرکت‌کننده', 'رویداد', 'تعداد', 'گروه تعرفه', 'مبلغ به تومان', 'وضعیت', 'بررسی'], data.map((order) => {
     const actions = el('div', null, 'actions');
+    const total = Number(order.quantity) * Number(order.unit_price);
     if (order.receipt_file_id) actions.append(link('مشاهده رسید', '/api/orders/' + encodeURIComponent(order.id) + '/receipt', 'button secondary small', true));
     if (order.status === 'pending') {
       [true, false].forEach((approve) => actions.append(button(approve ? 'تأیید پرداخت' : 'رد پرداخت', async () => {
@@ -515,7 +524,16 @@ async function showOrders() {
         await api('/api/orders/' + encodeURIComponent(order.id) + '/review', { method: 'POST', body: { approve } }); await load(); toast(approve ? 'پرداخت تأیید شد' : 'پرداخت رد شد');
       }, approve ? 'button small' : 'button danger small')));
     }
-    return [order.id, person(order), eventName(order), number(order.quantity), tariff(order), number(Number(order.quantity) * Number(order.unit_price)), badge(order.status), actions];
+    if (order.status === 'expired' && total > 0) {
+      actions.append(button('تأیید پرداخت و صدور بلیت', async () => {
+        const details = `${person(order)} · ${eventName(order)}\n${number(order.quantity)} بلیت · ${number(total)} تومان`;
+        if (!confirm(`${details}\n\nواریز این مبلغ را در حساب مقصد بررسی کرده‌اید و بلیت صادر شود؟`)) return;
+        const saved = await api('/api/orders/' + encodeURIComponent(order.id) + '/approve-expired-payment', { method: 'POST', body: { confirmed: true } });
+        await load();
+        toast(saved.already_reviewed ? 'این سفارش قبلاً تأیید شده است' : 'بلیت صادر شد و پیام آن در صف ارسال قرار گرفت');
+      }, 'button small'));
+    }
+    return [order.id, person(order), eventName(order), number(order.quantity), tariff(order), number(total), badge(order.status), actions];
   }));
   pager($('orders-list'), 'orders', data.length);
 }
@@ -607,6 +625,22 @@ async function showAdmins() {
     return [el('span', admin.user_id, 'mono'), roleNames[admin.role] || admin.role, actions];
   }));
 }
+async function showTelegramAbuseBlocks() {
+  const data = await api(query('/api/telegram-abuse-blocks', { limit: 50, offset: state.pages.abuseBlocks * 50 }));
+  const list = $('telegram-abuse-blocks');
+  if (!data.length) empty(list, 'حسابی در این صفحه مسدود نشده است');
+  else table(list, ['حساب تلگرام', 'زمان مسدودسازی', 'پیام‌های بررسی‌شده', 'تکرار', 'مدیریت'], data.map(entry => {
+    const account = entry.username ? `@${entry.username} · ${entry.stream_key}` : entry.stream_key;
+    const release = button('رفع مسدودسازی', async () => {
+      if (!confirm('مسدودسازی خودکار این حساب برداشته شود؟')) return;
+      await api('/api/telegram-abuse-blocks/' + encodeURIComponent(entry.stream_key), { method: 'DELETE' });
+      await showTelegramAbuseBlocks();
+      toast('مسدودسازی برداشته شد');
+    });
+    return [el('span', account, 'mono'), date(entry.blocked_at), number(entry.message_count), number(entry.repeated_count), release];
+  }));
+  if (data.length >= 50 || state.pages.abuseBlocks > 0) pager(list, 'abuseBlocks', data.length);
+}
 async function load() {
   const id = ++state.loading;
   $('loading').hidden = false; $('page-error').hidden = true;
@@ -621,6 +655,7 @@ async function load() {
       case 'tickets': await showTickets(); break;
       case 'users': await showUsers(); break;
       case 'admins': await showAdmins(); break;
+      case 'settings': await showTelegramAbuseBlocks(); break;
     }
   } catch (error) {
     if (id === state.loading) { $('page-error').textContent = error.message; $('page-error').hidden = false; }
@@ -775,6 +810,7 @@ $('event-form').addEventListener('submit', (event) => {
     const isPaid = pricingMode === 'differentiated' ? publicPrice > 0 || studentPrice > 0 : fixedPaid;
     const posterUrl = values.get('poster_url') || '';
     const body = { name: values.get('name').trim(), description: values.get('description').trim(), place_id: values.get('place_id') ? Number(values.get('place_id')) : null, capacity: Number(values.get('capacity')), max_per_user: Number(values.get('max_per_user')), price: publicPrice, fum_student_price: studentPrice, pricing_mode: pricingMode, poster_url: posterUrl, payment_instructions: values.get('payment_instructions').trim(), starts_at: startsAt, ends_at: endsAt, is_paid: isPaid, active: values.has('active') };
+    body.pending_booking_limit = values.get('pending_booking_limit') ? Number(values.get('pending_booking_limit')) : null;
     const registrationDay = $('registration-date').value, registrationTime = $('registration-time').value;
     if (registrationTime && !registrationDay) throw new Error('تاریخ پایان ثبت‌نام را انتخاب کنید');
     body.registration_closes_at = registrationDay ? Date.parse(jalaliTimeToIso(parseJalaliDate(registrationDay), registrationTime || '23:59')) / 1000 : null;
@@ -871,8 +907,26 @@ $('checkin-form').addEventListener('submit', (event) => { event.preventDefault()
 $('camera-start').addEventListener('click', () => action($('camera-start'), startCamera));
 $('camera-stop').addEventListener('click', stopCamera);
 $('broadcast-form').addEventListener('submit', (event) => {
-  event.preventDefault(); const form = event.currentTarget; const data = new FormData(form);
-  action(event.submitter, async () => { const body = { text: data.get('text').trim() }; if (data.get('audience_key')) body.audience_key = data.get('audience_key'); const result = await api('/api/broadcast', { method: 'POST', body }); const count = typeof result.queued === 'number' ? result.queued : result.count; $('broadcast-result').textContent = count !== undefined ? 'پیام برای ' + number(count) + ' دریافت‌کننده در صف قرار گرفت' : 'درخواست ارسال ثبت شد پیام‌ها به تدریج از صف ارسال می‌شوند'; form.elements.namedItem('confirm').checked = false; toast('پیام در صف ارسال قرار گرفت'); });
+  event.preventDefault();
+  const form = event.currentTarget;
+  const data = new FormData(form);
+  const text = data.get('text');
+  const audience = data.get('audience_key');
+  action(event.submitter, async () => {
+    const body = { text: text.trim() };
+    if (audience !== 'all') body.audience_key = audience;
+    const result = await api('/api/broadcast', { method: 'POST', body });
+    const count = typeof result.queued === 'number' ? result.queued : result.count;
+    $('broadcast-result').textContent = count !== undefined
+      ? 'پیام برای ' + number(count) + ' دریافت‌کننده در صف قرار گرفت'
+      : 'درخواست ارسال ثبت شد. پیام‌ها به تدریج از صف ارسال می‌شوند.';
+    if (form.elements.namedItem('text').value === text && form.elements.namedItem('audience_key').value === audience) {
+      form.reset();
+    } else {
+      form.elements.namedItem('confirm').checked = false;
+    }
+    toast('پیام در صف ارسال قرار گرفت');
+  });
 });
 $('admin-form').addEventListener('submit', (event) => { event.preventDefault(); const form = event.currentTarget; const data = new FormData(form); action(event.submitter, async () => { await api('/api/admins', { method: 'POST', body: { user_id: Number(data.get('user_id')), role: data.get('role') } }); form.reset(); await load(); toast('دسترسی ثبت شد'); }); });
 $('expire').addEventListener('click', () => action($('expire'), async () => { const result = await api('/api/expire', { method: 'POST' }); $('expire-result').textContent = 'پاکسازی انجام شد' + (result.expired !== undefined ? ' تعداد رزرو آزادشده ' + number(result.expired) : ''); toast('رزروهای منقضی بررسی شدند'); }));

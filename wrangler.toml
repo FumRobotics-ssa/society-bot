@@ -3,6 +3,10 @@ main = "src/worker.js"
 compatibility_date = "2026-11-01"
 workers_dev = true
 
+[observability.logs]
+enabled = true
+invocation_logs = false
+
 [assets]
 directory = "./public"
 binding = "ASSETS"
@@ -18,7 +22,7 @@ FUM_STUDENT_NUMBER_LENGTH = "10"
 
 [[d1_databases]]
 binding = "DB"
-database_id = "0dfba6f2-cf7d-44a3-9e99-712531b7c261"
+database_id = "e3c38a02-ec73-4383-bfc9-fafffe16cce5"
 migrations_dir = "migrations"
 
 [triggers]
@@ -27,6 +31,46 @@ crons = ["* * * * *"]
 [[ratelimits]]
 name = "CHECKIN_RATE_LIMITER"
 namespace_id = "9472061843"
+
+[ratelimits.simple]
+limit = 120
+period = 60
+
+[[ratelimits]]
+name = "TELEGRAM_INGRESS_RATE"
+namespace_id = "9472061844"
+
+[ratelimits.simple]
+limit = 40
+period = 60
+
+[[ratelimits]]
+name = "TELEGRAM_ABUSE_SAMPLE"
+namespace_id = "9472061845"
+
+[ratelimits.simple]
+limit = 3
+period = 60
+
+[[ratelimits]]
+name = "TELEGRAM_GLOBAL_RATE"
+namespace_id = "9472061846"
+
+[ratelimits.simple]
+limit = 600
+period = 60
+
+[[ratelimits]]
+name = "WEB_REQUEST_RATE"
+namespace_id = "9472061847"
+
+[ratelimits.simple]
+limit = 900
+period = 60
+
+[[ratelimits]]
+name = "WEB_LOGIN_RATE"
+namespace_id = "9472061848"
 
 [ratelimits.simple]
 limit = 120

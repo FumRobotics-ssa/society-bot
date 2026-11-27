@@ -7,6 +7,8 @@ import { handleRequest } from '../src/app.js';
 import { handleUpdate } from '../src/bot.js';
 import { createLoginCode, exchangeLogin, digest, SESSION_COOKIE } from '../src/auth.js';
 import { receiveUpdate, processOutbox, processInbox } from '../src/jobs.js';
+import { receiveTelegram } from '../src/telegram-receiver.js';
+import worker from '../src/worker.js';
 
 const schema = readdirSync(new URL('../migrations/', import.meta.url)).filter(name => name.endsWith('.sql')).sort().map(name => readFileSync(new URL('../migrations/' + name, import.meta.url), 'utf8')).join('\n');
 
@@ -36,6 +38,60 @@ test('role revocation immediately invalidates existing sessions and checkin role
   assert.equal((await request('/api/me', { headers: { Cookie: auth } })).status, 200);
   await store.removeAdmin(7); assert.equal((await request('/api/me', { headers: { Cookie: auth } })).status, 401); db.close();
 });
+test('late payment approval checks access, claims available capacity and sends one ticket notification', async t => {
+  const { db, env, store, request } = fixture();
+  t.after(() => db.close());
+  await store.upsertUser({ id: 1, phone: '09123456789' });
+  await store.upsertUser({ id: 2, phone: '09223456789' });
+  await store.setAdmin(7, 'checkin');
+  await store.setAdmin(8, 'admin');
+  const event = await store.saveEvent({ name: 'کارگاه', capacity: 2, max_per_user: 2, is_paid: 1, price: 1000 });
+  const { order, tickets } = await store.reserve(1, event.id, 2, 'late');
+  await db.prepare("UPDATE orders SET status='expired' WHERE id=?").bind(order.id).run();
+  await db.prepare('DELETE FROM tickets WHERE id=?').bind(tickets[1].id).run();
+  const { order: replacement } = await store.reserve(2, event.id, 1, 'replacement');
+  const path = '/api/orders/' + order.id + '/approve-expired-payment';
+  const approve = (auth, confirmed) => request(path, {
+    method: 'POST', headers: { Origin: env.PUBLIC_URL, ...(auth ? { Cookie: auth } : {}) },
+    body: JSON.stringify({ confirmed }),
+  });
+  assert.equal((await approve(null, true)).status, 401);
+  assert.equal((await approve(await cookie(db, 7), true)).status, 403);
+  const auth = await cookie(db, 8);
+  assert.equal((await approve(auth, false)).status, 400);
+  const full = await approve(auth, true);
+  assert.equal(full.status, 409);
+  assert.equal((await full.json()).code, 'EVENT_FULL');
+  await store.cancelOrder(replacement.id, 2);
+
+  db.exec("CREATE TRIGGER reject_late_notification BEFORE INSERT ON outbox WHEN NEW.method='__notify_late_payment' BEGIN SELECT RAISE(ABORT,'test failure'); END;");
+  assert.equal((await approve(auth, true)).status, 500);
+  assert.equal((await store.getOrder(order.id)).status, 'expired');
+  assert.equal((await store.getOrder(order.id)).tickets.length, 1);
+  db.exec('DROP TRIGGER reject_late_notification;');
+  const results = await Promise.all([approve(auth, true), approve(auth, true)]);
+  assert.ok(results.every(response => response.status === 200));
+  const approved = await Promise.all(results.map(response => response.json()));
+  assert.deepEqual(approved.map(result => result.already_reviewed).sort(), [false, true]);
+  assert.ok(approved.every(result => result.tickets.length === 2 && result.tickets.some(item => item.id === tickets[0].id)));
+  assert.equal((await store.getEvent(event.id)).remaining, 0);
+  assert.equal((await store.one("SELECT COUNT(*) AS n FROM audit_log WHERE action='approve_expired_payment'")).n, 1);
+
+  const sent = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (_url, options) => {
+    sent.push(JSON.parse(options.body));
+    return Response.json({ ok: true });
+  };
+  try { await processOutbox(env); } finally { globalThis.fetch = original; }
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].chat_id, 1);
+  assert.match(sent[0].text, /بلیت برای شما صادر شد/);
+  const buttons = sent[0].reply_markup.inline_keyboard.flat();
+  assert.equal(buttons.length, 2);
+  assert.equal((await request(new URL(buttons[0].url).pathname)).status, 200);
+});
+
 test('event statistics count distinct registrants, checked-in tickets and live reservations', async t => {
   const { db, store, request } = fixture();
   t.after(() => db.close());
@@ -379,11 +435,227 @@ test('webhook rejects absent or incorrect secret and deduplicates durable update
   await receiveUpdate(env, { update_id: 1, message: { from: { id: 2 } } }); await receiveUpdate(env, { update_id: 1, message: { from: { id: 2 } } });
   assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM inbox').first()).n, 1); db.close();
 });
+test('blocked Telegram accounts get no processing for messages or callbacks', async t => {
+  const { db, env, store, request } = fixture();
+  t.after(() => db.close());
+  const message = (update_id, id) => ({ update_id, message: { from: { id }, chat: { id, type: 'private' }, text: '/start' } });
+  await receiveUpdate(env, message(1, 42));
+  env.BLOCKED_TELEGRAM_USER_IDS = '7, 42';
+  const post = update => request('/telegram', {
+    method: 'POST', headers: { 'X-Telegram-Bot-Api-Secret-Token': env.WEBHOOK_SECRET },
+    body: JSON.stringify(update),
+  });
+  assert.equal((await post(message(2, 42))).status, 200);
+  assert.equal((await post({ update_id: 3, callback_query: { from: { id: 42 } } })).status, 200);
+  assert.equal((await post(message(4, 142))).status, 200);
+  assert.deepEqual((await store.all('SELECT update_id FROM inbox ORDER BY update_id')).map(item => item.update_id), [1, 4]);
+  await processInbox(env, 1, '42');
+  assert.equal((await store.one('SELECT status FROM inbox WHERE update_id=1')).status, 'done');
+  assert.equal((await store.one("SELECT count(*) AS n FROM outbox WHERE json_extract(payload,'$.chat_id')=?", 42)).n, 0);
+});
+
+test('Telegram ingress caps queued work and blocks repeated bursts after verifying unique, recent messages', async t => {
+  const { db, env, store, request } = fixture();
+  t.after(() => db.close());
+  env.TELEGRAM_ABUSE_SAMPLE = { limit: async () => ({ success: true }) };
+  const now = Math.floor(Date.now() / 1000) - 1;
+  const update = (id, from, text, date = now) => ({
+    update_id: id, message: { date, message_id: id, from: { id: from, username: 'fixture_user' }, chat: { id: from, type: 'private' }, text },
+  });
+  const waiting = async id => (await store.one("SELECT count(*) AS n FROM inbox WHERE stream_key=? AND status='new'", String(id))).n;
+  for (let index = 1; index <= 24; index++) {
+    assert.equal(await receiveUpdate(env, update(index, 1, 'متن متفاوت ' + index)), '1');
+    assert.equal(await receiveUpdate(env, update(100 + index, 2, 'تکراری')), '2');
+    assert.equal(await receiveUpdate(env, update(200 + index, 3, 'پیام مانده نزد تلگرام', now - 300)), '3');
+  }
+  assert.equal(await receiveUpdate(env, update(25, 1, 'یک متن متفاوت دیگر')), null);
+  assert.equal(await waiting(1), 24);
+  assert.equal(await receiveUpdate(env, update(225, 3, 'متن تازه')), null);
+  assert.equal(await waiting(3), 24);
+  assert.equal((await store.listTelegramAbuseBlocks()).length, 0);
+
+  assert.equal(await receiveUpdate(env, update(124, 2, 'تکراری')), null);
+  assert.equal((await store.listTelegramAbuseBlocks()).length, 0);
+  assert.equal(await receiveUpdate(env, update(125, 2, 'تکراری')), null);
+  assert.equal(await waiting(2), 0);
+  const [block] = await store.listTelegramAbuseBlocks();
+  assert.equal(block.stream_key, '2');
+  assert.equal(block.message_count, 24);
+  assert.equal(block.repeated_count, 23);
+  assert.equal(await receiveUpdate(env, update(126, 2, 'متن تازه')), null);
+  assert.equal(await receiveUpdate(env, update(301, 4, 'ثبت‌نام')), '4');
+
+  env.TELEGRAM_INGRESS_RATE = { limit: async () => ({ success: false }) };
+  const preventedCallback = { update_id: 302, callback_query: { from: { id: 4 } } };
+  assert.equal(await receiveUpdate(env, preventedCallback), null);
+  assert.equal((await store.listTelegramAbuseBlocks()).length, 1);
+  assert.equal(await waiting(4), 1);
+  delete env.TELEGRAM_INGRESS_RATE;
+
+  await store.setAdmin(7, 'checkin');
+  const URL = '/api/telegram-abuse-blocks';
+  assert.equal((await request(URL)).status, 401);
+  assert.equal((await request(URL, { headers: { Cookie: await cookie(db, 7) } })).status, 403);
+  const auth = await cookie(db, 99);
+  const response = await request(URL + '/2', { method: 'DELETE', headers: { Origin: env.PUBLIC_URL, Cookie: auth } });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await (await request(URL, { headers: { Cookie: auth } })).json(), []);
+  assert.equal(await receiveUpdate(env, update(127, 2, 'پس از رفع مسدودسازی')), '2');
+});
+
+test('the Compose receiver queues Telegram callbacks and forwards registration replies after acknowledgement', async t => {
+  const { db, env, request, store } = fixture();
+  t.after(() => db.close());
+  env.DEFER_TELEGRAM_JOBS = true;
+  const event = await store.saveEvent({ name: 'رویداد تست', capacity: 4 });
+  const shutdown = new AbortController();
+  const offsets = [];
+  const replies = [];
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    const path = new URL(url).pathname;
+    if (path.endsWith('/getUpdates')) {
+      offsets.push(JSON.parse(init.body).offset);
+      if (offsets.length === 1) return Response.json({ ok: true, result: [{
+        update_id: 123, callback_query: { id: 'fixture', from: { id: 42 }, data: `e:${event.id}`,
+          message: { chat: { type: 'private', id: 42 } } },
+      }] });
+      shutdown.abort();
+      return Response.json({ ok: true, result: [] });
+    }
+    if (path === '/telegram') return request('/telegram', init);
+    replies.push(JSON.parse(init.body));
+    return Response.json({ ok: true });
+  });
+  await receiveTelegram(env, AbortSignal.any([shutdown.signal, AbortSignal.timeout(1500)]));
+  assert.deepEqual(offsets, [undefined, 124]);
+  assert.equal((await store.one('SELECT status FROM inbox WHERE update_id=123')).status, 'new');
+  await processInbox(env);
+  await processOutbox(env, 8, 'interactive');
+  assert.ok(replies.some(reply => reply.reply_markup?.inline_keyboard[0][0].callback_data === `register:${event.id}`));
+});
+
+test('standalone intake caps combined accounts and records a rejected update', async t => {
+  const { db, env } = fixture();
+  t.after(() => db.close());
+  const counters = [];
+  Object.assign(env, { INBOX_CAPACITY: 2, RECORD_QUEUE_EVENT: name => counters.push(name) });
+  const update = id => ({ update_id: id, message: { from: { id }, chat: { type: 'private', id }, text: '/start' } });
+  assert.equal(await receiveUpdate(env, update(1)), '1');
+  assert.equal(await receiveUpdate(env, update(2)), '2');
+  assert.equal(await receiveUpdate(env, update(3)), null);
+  assert.deepEqual(counters, ['not_enqueued']);
+  await processInbox(env);
+  assert.equal(await receiveUpdate(env, update(4)), '4');
+  assert.equal((await db.prepare("SELECT count(*) AS n FROM inbox WHERE status IN ('new','processing')").first()).n, 2);
+});
+
+test('Worker refuses to claim additional inbox work while another invocation holds the running slot', async t => {
+  const { db, env, store } = fixture();
+  t.after(() => db.close());
+  env.INBOX_CONCURRENCY = 1;
+  for (const id of [1, 2]) {
+    await receiveUpdate(env, { update_id: id, message: { from: { id }, chat: { type: 'private', id }, text: '/start' } });
+  }
+  await db.prepare("UPDATE inbox SET status='processing',lease_until=unixepoch()+90 WHERE update_id=1").run();
+  await processInbox(env, 5, '2');
+  assert.equal((await store.one('SELECT status FROM inbox WHERE update_id=2')).status, 'new');
+  await db.prepare('UPDATE inbox SET lease_until=0 WHERE update_id=1').run();
+  await processInbox(env, 5);
+  assert.equal((await store.one("SELECT count(*) AS n FROM inbox WHERE status='done'")).n, 2);
+});
+
+test('Worker previews expose health while the canonical origin applies the login rate limit', async t => {
+  const { db, env } = fixture();
+  t.after(() => db.close());
+  const ctx = { waitUntil() {} };
+  env.WEB_LOGIN_RATE = { limit: async () => ({ success: false }) };
+  assert.equal((await worker.fetch(new Request('https://preview.example.test/health'), env, ctx)).status, 200);
+  assert.equal((await worker.fetch(new Request('https://preview.example.test/api/session'), env, ctx)).status, 404);
+  assert.equal((await worker.fetch(new Request('https://example.test/api/session', { method: 'POST' }), env, ctx)).status, 429);
+});
+
+test('interactive outbox sends registration replies ahead of waiting media and broadcasts', async t => {
+  const { db, env, store } = fixture();
+  t.after(() => db.close());
+  await store.enqueue('sendPhoto', { chat_id: 1, photo: 'fixture-photo' }, 'old-photo');
+  await store.enqueue('sendMessage', { chat_id: 1, text: 'broadcast' }, 'broadcast-example:user:1');
+  await store.enqueue('sendMessage', { chat_id: 1, text: 'ثبت‌نام' }, 'registration-reply');
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({ ok: true }));
+  env.OUTBOX_LANE_CONCURRENCY = 1;
+  await db.prepare("UPDATE outbox SET status='processing',lease_until=unixepoch()+90 WHERE dedupe_key='old-photo'").run();
+  await processOutbox(env, 8, 'interactive');
+  assert.equal(fetch.mock.calls.length, 1);
+  assert.equal(JSON.parse(fetch.mock.calls[0].arguments[1].body).text, 'ثبت‌نام');
+  assert.equal((await store.one("SELECT count(*) AS n FROM outbox WHERE status IN ('pending','processing')")).n, 2);
+});
+
 test('Telegram 429 backs off durable outbox without dropping message', async () => {
   const { db, env, store } = fixture(); await store.enqueue('sendMessage', { chat_id: 1, text: 'hello' }, 'x');
   const original = globalThis.fetch; globalThis.fetch = async () => Response.json({ ok: false, error_code: 429, parameters: { retry_after: 60 } });
   try { await processOutbox(env, 1); } finally { globalThis.fetch = original; }
   const job = await db.prepare('SELECT * FROM outbox').first(); assert.equal(job.status, 'pending'); assert.ok(job.available_at >= Math.floor(Date.now() / 1000) + 59); db.close();
+});
+
+test('uncertain receipt sends are held for panel review without resending the same media', async t => {
+  const { db, env, store } = fixture();
+  t.after(() => db.close());
+  await store.enqueue('sendPhoto', { chat_id: 1, photo: 'fixture-photo' }, 'receipt:timeout:photo');
+  await store.enqueue('sendPhoto', { chat_id: 1, photo: 'fixture-photo' }, 'receipt:interrupted:photo');
+  await store.enqueue('sendDocument', { chat_id: 1, document: 'fixture-pdf' }, 'receipt:old-retry:pdf');
+  await store.enqueue('sendMessage', { chat_id: 1, text: 'Regular message' }, 'regular');
+  await db.prepare("UPDATE outbox SET status='processing',attempts=1,lease_until=0 WHERE dedupe_key='receipt:interrupted:photo'").run();
+  await db.prepare("UPDATE outbox SET attempts=1,last_error='Timed out' WHERE dedupe_key='receipt:old-retry:pdf'").run();
+
+  const calls = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (_url, request) => {
+    const payload = JSON.parse(request.body);
+    calls.push(payload);
+    if (payload.photo) throw new DOMException('Timed out', 'TimeoutError');
+    return Response.json({ ok: true });
+  };
+  try {
+    await processOutbox(env);
+    await db.prepare("UPDATE outbox SET available_at=0 WHERE status='pending'").run();
+    await processOutbox(env);
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.equal(calls.filter(payload => payload.photo || payload.document).length, 1);
+  assert.equal(calls.filter(payload => payload.text).length, 1);
+  const held = await store.all("SELECT status,attempts,last_error FROM outbox WHERE dedupe_key LIKE 'receipt:%'");
+  assert.equal(held.length, 3);
+  for (const row of held) {
+    assert.equal(row.status, 'failed');
+    assert.equal(row.attempts, 1);
+    assert.match(row.last_error, /Receipt delivery unconfirmed/);
+  }
+});
+
+test('a receipt is retried after Telegram explicitly rejects the send with a rate limit', async t => {
+  const { db, env, store } = fixture();
+  t.after(() => db.close());
+  await store.enqueue('sendDocument', { chat_id: 1, document: 'fixture-pdf' }, 'receipt:rate-limit:pdf');
+  let requests = 0;
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => ++requests === 1
+    ? Response.json({ ok: false, error_code: 429, parameters: { retry_after: 60 } }, { status: 429 })
+    : Response.json({ ok: true });
+  try {
+    await processOutbox(env);
+    const first = await store.one('SELECT status,last_error,available_at FROM outbox');
+    assert.equal(first.status, 'pending');
+    assert.match(first.last_error, /^Telegram 429:/);
+    assert.ok(first.available_at >= Math.floor(Date.now() / 1000) + 59);
+    await db.prepare('UPDATE outbox SET available_at=0').run();
+    await processOutbox(env);
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.equal(requests, 2);
+  const sent = await store.one('SELECT status,attempts FROM outbox');
+  assert.equal(sent.status, 'sent');
+  assert.equal(sent.attempts, 2);
 });
 test('sender ordering blocks later updates during retry backoff but permits other senders', async () => {
   const { db, env } = fixture();
@@ -394,6 +666,28 @@ test('sender ordering blocks later updates during retry backoff but permits othe
   await processInbox(env, 1);
   assert.equal((await db.prepare('SELECT status FROM inbox WHERE update_id=2').first()).status, 'new');
   assert.equal((await db.prepare('SELECT status FROM inbox WHERE update_id=3').first()).status, 'done'); db.close();
+});
+
+test('a new webhook processes its sender without waiting for another sender’s backlog', async t => {
+  const { db, env, store } = fixture();
+  t.after(() => db.close());
+  for (let id = 1; id <= 4; id++) await receiveUpdate(env, { update_id: id, message: { from: { id: 1 } } });
+  const stream = await receiveUpdate(env, { update_id: 5, message: { from: { id: 2 } } });
+  await receiveUpdate(env, { update_id: 6, message: { from: { id: 2 } } });
+  const status = id => store.one('SELECT status FROM inbox WHERE update_id=?', id).then(row => row.status);
+  await db.prepare('UPDATE inbox SET available_at=unixepoch()+300 WHERE update_id=5').run();
+  await processInbox(env, 1, stream);
+  assert.equal(await status(5), 'new');
+  assert.equal(await status(6), 'new');
+  await db.prepare('UPDATE inbox SET available_at=0 WHERE update_id=5').run();
+  await processInbox(env, 1, stream);
+  assert.equal(await status(1), 'new');
+  assert.equal(await status(5), 'done');
+  assert.equal(await status(6), 'new');
+  await processInbox(env, 2);
+  assert.equal(await status(1), 'done');
+  assert.equal(await status(2), 'new');
+  assert.equal(await status(6), 'done');
 });
 
 test('inbox claims the first eligible active update and recovers an expired lease in order', async t => {
