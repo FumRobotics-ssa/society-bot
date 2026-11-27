@@ -18,7 +18,7 @@ FUM_STUDENT_NUMBER_LENGTH = "10"
 
 [[d1_databases]]
 binding = "DB"
-database_id = "0dfba6f2-cf7d-44a3-9e99-712531b7c261"
+database_id = "e3c38a02-ec73-4383-bfc9-fafffe16cce5"
 migrations_dir = "migrations"
 
 [triggers]
