@@ -1,5 +1,6 @@
 import { handleRequest } from './app.js';
 import { runJobs } from './jobs.js';
+import arvanRelay from '../ops/cloudflare/arvan-relay.js';
 
 const posterPath = /^\/api\/events\/\d+\/poster$/;
 const queueEnv = env => ({
@@ -24,17 +25,11 @@ async function scheduledJobs(env) {
 
 export default {
   async fetch(request, env, ctx) {
+    if (env.HOSTING_MODE !== 'cloudflare') return arvanRelay.fetch(request, env);
     const url = new URL(request.url);
     // Version previews may probe health. Application data stays on the configured origin.
     if (env.PUBLIC_URL && url.origin !== new URL(env.PUBLIC_URL).origin && url.pathname !== '/health') {
       return new Response('Not found', { status: 404 });
-    }
-    if (url.pathname !== '/telegram') {
-      const key = request.headers.get('CF-Connecting-IP') || 'local';
-      const limit = url.pathname === '/api/session' ? env.WEB_LOGIN_RATE : env.WEB_REQUEST_RATE;
-      if (limit && !(await limit.limit({ key })).success) {
-        return new Response('Too many requests', { status: 429, headers: { 'Cache-Control': 'no-store' } });
-      }
     }
     if (request.method !== 'GET' || !posterPath.test(url.pathname)) return handleRequest(request, queueEnv(env), ctx);
     url.search = '';
@@ -47,5 +42,7 @@ export default {
     }
     return response;
   },
-  scheduled(event, env, ctx) { ctx.waitUntil(scheduledJobs(env)); },
+  scheduled(event, env, ctx) {
+    if (env.HOSTING_MODE === 'cloudflare') ctx.waitUntil(scheduledJobs(env));
+  },
 };

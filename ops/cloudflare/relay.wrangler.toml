@@ -5,3 +5,11 @@ workers_dev = true
 
 [triggers]
 crons = ["* * * * *"]
+
+[[ratelimits]]
+name = "TELEGRAM_RELAY_RATE"
+namespace_id = "9472061849"
+
+[ratelimits.simple]
+limit = 600
+period = 60
