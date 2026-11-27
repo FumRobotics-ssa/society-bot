@@ -515,6 +515,7 @@ async function showOrders() {
   const tariff = order => order.pricing_group === 'fum_student' ? 'فردوسی (خوداظهاری)' : order.pricing_group === 'general' ? 'عموم' : 'یکسان برای همه';
   table($('orders-list'), ['سفارش', 'شرکت‌کننده', 'رویداد', 'تعداد', 'گروه تعرفه', 'مبلغ به تومان', 'وضعیت', 'بررسی'], data.map((order) => {
     const actions = el('div', null, 'actions');
+    const total = Number(order.quantity) * Number(order.unit_price);
     if (order.receipt_file_id) actions.append(link('مشاهده رسید', '/api/orders/' + encodeURIComponent(order.id) + '/receipt', 'button secondary small', true));
     if (order.status === 'pending') {
       [true, false].forEach((approve) => actions.append(button(approve ? 'تأیید پرداخت' : 'رد پرداخت', async () => {
@@ -522,7 +523,16 @@ async function showOrders() {
         await api('/api/orders/' + encodeURIComponent(order.id) + '/review', { method: 'POST', body: { approve } }); await load(); toast(approve ? 'پرداخت تأیید شد' : 'پرداخت رد شد');
       }, approve ? 'button small' : 'button danger small')));
     }
-    return [order.id, person(order), eventName(order), number(order.quantity), tariff(order), number(Number(order.quantity) * Number(order.unit_price)), badge(order.status), actions];
+    if (order.status === 'expired' && total > 0) {
+      actions.append(button('تأیید پرداخت و صدور بلیت', async () => {
+        const details = `${person(order)} · ${eventName(order)}\n${number(order.quantity)} بلیت · ${number(total)} تومان`;
+        if (!confirm(`${details}\n\nواریز این مبلغ را در حساب مقصد بررسی کرده‌اید و بلیت صادر شود؟`)) return;
+        const saved = await api('/api/orders/' + encodeURIComponent(order.id) + '/approve-expired-payment', { method: 'POST', body: { confirmed: true } });
+        await load();
+        toast(saved.already_reviewed ? 'این سفارش قبلاً تأیید شده است' : 'بلیت صادر شد و پیام آن در صف ارسال قرار گرفت');
+      }, 'button small'));
+    }
+    return [order.id, person(order), eventName(order), number(order.quantity), tariff(order), number(total), badge(order.status), actions];
   }));
   pager($('orders-list'), 'orders', data.length);
 }

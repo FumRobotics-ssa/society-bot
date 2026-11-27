@@ -547,6 +547,54 @@ export class Store {
     await this.audit(actorId, approve ? 'approve_order' : 'reject_order', id, { quantity: order.quantity });
     return { ...order, previous_status: 'pending', already_reviewed: false };
   }
+  async approveExpiredPayment(id, actorId) {
+    const order = await this.getOrder(id);
+    if (!order) throw domainError('NOT_FOUND', 'سفارش پیدا نشد');
+    if (order.status === 'approved') return { ...order, already_reviewed: true };
+    if (order.status !== 'expired' || order.unit_price <= 0) {
+      throw domainError('ORDER_NOT_EXPIRED', 'فقط پرداخت سفارش‌های منقضی دارای هزینه را می‌توان از این مسیر تأیید کرد');
+    }
+    if (order.tickets.length > order.quantity) {
+      throw domainError('ORDER_TICKETS_MISMATCH', 'تعداد بلیت‌های سفارش با تعداد خرید یکسان نیست');
+    }
+    const actor = int(actorId, 'شناسه مدیر');
+    const missing = order.quantity - order.tickets.length;
+    const notification = `late-payment:${order.id}`;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const tickets = ticketBatch(missing);
+      const steps = [this.stmt(`UPDATE orders SET status='approved',reviewed_by=?,reviewed_at=unixepoch(),
+        expires_at=NULL,updated_at=unixepoch()
+        WHERE id=? AND status='expired' AND unit_price>0
+          AND EXISTS(SELECT 1 FROM users WHERE id=orders.user_id AND is_deleted=0)`, actor, order.id)];
+      if (missing) {
+        steps.push(this.stmt(`INSERT INTO tickets(id,token,checkin_code,order_id)
+          SELECT json_extract(value,'$.id'),json_extract(value,'$.token'),json_extract(value,'$.checkin_code'),?
+          FROM json_each(?) WHERE changes()>0`, order.id, JSON.stringify(tickets)));
+      }
+      steps.push(
+        this.stmt(`INSERT INTO audit_log(actor_id,action,target,details_json)
+          SELECT ?,'approve_expired_payment',?,json_object('quantity',?,'amount',?) WHERE changes()>0`,
+          actor, order.id, order.quantity, order.quantity * order.unit_price),
+        this.stmt(`INSERT INTO outbox(id,method,payload,dedupe_key)
+          SELECT ?,'__notify_late_payment',json_object('order_id',?),? WHERE changes()>0
+          ON CONFLICT(dedupe_key) DO NOTHING`, notification, order.id, notification),
+      );
+      let updated;
+      try {
+        [updated] = await this.db.batch(steps);
+      } catch (error) {
+        if (attempt < 4 && /tickets\.checkin_code/i.test(String(error))) continue;
+        const expected = mapDbError(error);
+        if (expected !== error) throw expected;
+        throw new Error('Could not approve the expired payment', { cause: error });
+      }
+      const current = await this.getOrder(order.id);
+      if (current?.status !== 'approved') {
+        throw domainError('ORDER_UNAVAILABLE', 'وضعیت سفارش یا حساب کاربر دیگر برای تأیید در دسترس نیست');
+      }
+      return { ...current, already_reviewed: !updated.meta.changes };
+    }
+  }
   async cancelOrder(id, userId) {
     const r = await this.run(`UPDATE orders SET status='cancelled',updated_at=unixepoch() WHERE id=? AND user_id=? AND status IN ('reserved','pending')`, String(id), Number(userId));
     const order = await this.getOrder(id);

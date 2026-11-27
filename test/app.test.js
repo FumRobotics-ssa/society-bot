@@ -36,6 +36,60 @@ test('role revocation immediately invalidates existing sessions and checkin role
   assert.equal((await request('/api/me', { headers: { Cookie: auth } })).status, 200);
   await store.removeAdmin(7); assert.equal((await request('/api/me', { headers: { Cookie: auth } })).status, 401); db.close();
 });
+test('late payment approval checks access, claims available capacity and sends one ticket notification', async t => {
+  const { db, env, store, request } = fixture();
+  t.after(() => db.close());
+  await store.upsertUser({ id: 1, phone: '09123456789' });
+  await store.upsertUser({ id: 2, phone: '09223456789' });
+  await store.setAdmin(7, 'checkin');
+  await store.setAdmin(8, 'admin');
+  const event = await store.saveEvent({ name: 'کارگاه', capacity: 2, max_per_user: 2, is_paid: 1, price: 1000 });
+  const { order, tickets } = await store.reserve(1, event.id, 2, 'late');
+  await db.prepare("UPDATE orders SET status='expired' WHERE id=?").bind(order.id).run();
+  await db.prepare('DELETE FROM tickets WHERE id=?').bind(tickets[1].id).run();
+  const { order: replacement } = await store.reserve(2, event.id, 1, 'replacement');
+  const path = '/api/orders/' + order.id + '/approve-expired-payment';
+  const approve = (auth, confirmed) => request(path, {
+    method: 'POST', headers: { Origin: env.PUBLIC_URL, ...(auth ? { Cookie: auth } : {}) },
+    body: JSON.stringify({ confirmed }),
+  });
+  assert.equal((await approve(null, true)).status, 401);
+  assert.equal((await approve(await cookie(db, 7), true)).status, 403);
+  const auth = await cookie(db, 8);
+  assert.equal((await approve(auth, false)).status, 400);
+  const full = await approve(auth, true);
+  assert.equal(full.status, 409);
+  assert.equal((await full.json()).code, 'EVENT_FULL');
+  await store.cancelOrder(replacement.id, 2);
+
+  db.exec("CREATE TRIGGER reject_late_notification BEFORE INSERT ON outbox WHEN NEW.method='__notify_late_payment' BEGIN SELECT RAISE(ABORT,'test failure'); END;");
+  assert.equal((await approve(auth, true)).status, 500);
+  assert.equal((await store.getOrder(order.id)).status, 'expired');
+  assert.equal((await store.getOrder(order.id)).tickets.length, 1);
+  db.exec('DROP TRIGGER reject_late_notification;');
+  const results = await Promise.all([approve(auth, true), approve(auth, true)]);
+  assert.ok(results.every(response => response.status === 200));
+  const approved = await Promise.all(results.map(response => response.json()));
+  assert.deepEqual(approved.map(result => result.already_reviewed).sort(), [false, true]);
+  assert.ok(approved.every(result => result.tickets.length === 2 && result.tickets.some(item => item.id === tickets[0].id)));
+  assert.equal((await store.getEvent(event.id)).remaining, 0);
+  assert.equal((await store.one("SELECT COUNT(*) AS n FROM audit_log WHERE action='approve_expired_payment'")).n, 1);
+
+  const sent = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (_url, options) => {
+    sent.push(JSON.parse(options.body));
+    return Response.json({ ok: true });
+  };
+  try { await processOutbox(env); } finally { globalThis.fetch = original; }
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].chat_id, 1);
+  assert.match(sent[0].text, /بلیت برای شما صادر شد/);
+  const buttons = sent[0].reply_markup.inline_keyboard.flat();
+  assert.equal(buttons.length, 2);
+  assert.equal((await request(new URL(buttons[0].url).pathname)).status, 200);
+});
+
 test('event statistics count distinct registrants, checked-in tickets and live reservations', async t => {
   const { db, store, request } = fixture();
   t.after(() => db.close());

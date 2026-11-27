@@ -1,5 +1,5 @@
 import { Store } from './store.js';
-import { handleUpdate } from './bot.js';
+import { handleUpdate, notifyOrder } from './bot.js';
 import { now } from './auth.js';
 import { runBackup } from './backup.js';
 
@@ -107,7 +107,14 @@ export async function processOutbox(env, limit = 8) {
     try {
       if (job.method === '__broadcast') await broadcast(job, env);
       else if (job.method === '__backup') await runBackup(env, job.id);
-      else await telegram(job.method, JSON.parse(job.payload), env, receiptDelivery ? 25000 : 10000);
+      else if (job.method === '__notify_late_payment') {
+        const store = new Store(env.DB);
+        const { order_id } = JSON.parse(job.payload);
+        const order = await store.getOrder(order_id);
+        if (order?.status === 'approved') {
+          await notifyOrder(order, env, store, job.dedupe_key, '✅ پرداخت شما تأیید شد و بلیت برای شما صادر شد.');
+        }
+      } else await telegram(job.method, JSON.parse(job.payload), env, receiptDelivery ? 25000 : 10000);
       await env.DB.prepare("UPDATE outbox SET status='sent',sent_at=?,last_error=NULL WHERE id=? AND lease_until=?").bind(now(), job.id, job.lease_until).run();
     } catch (error) {
       const uncertainReceipt = receiptDelivery && !error.permanent && !error.safeToRetry;

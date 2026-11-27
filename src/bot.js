@@ -146,7 +146,7 @@ function csv(rows, columns) {
   return '\uFEFF' + [columns.map(c => cell(c[1])).join(','), ...rows.map(row => columns.map(c => cell(typeof c[0] === 'function' ? c[0](row) : row[c[0]])).join(','))].join('\r\n');
 }
 
-export async function notifyOrder(order, env, store, key = `order:${order.id}`) {
+export async function notifyOrder(order, env, store, key = `order:${order.id}`, approvedMessage = '✅ ثبت‌نام شما تأیید شد.') {
   if (!order) return;
   const tickets = order.tickets || (await store.getOrder(order.id))?.tickets || [];
   if (order.status !== 'approved') {
@@ -164,7 +164,7 @@ export async function notifyOrder(order, env, store, key = `order:${order.id}`) 
     await store.enqueue('sendMessage', {
       chat_id: order.user_id,
       text: paragraphs(
-        `🎫 نام رویداد: ${order.event_name || 'رویداد'}\n✅ ثبت‌نام شما تأیید شد.`,
+        `🎫 نام رویداد: ${order.event_name || 'رویداد'}\n${approvedMessage}`,
         orderText(order, false),
         'برای دیدن بلیت و کد QR، دکمهٔ بلیت را بزنید.',
       ),

@@ -199,6 +199,11 @@ async function api(request, env, store, url) {
     await notifyOrder(order, env, store, `review:${order.id}:${order.status}`);
     return json(order);
   }
+  const latePayment = path.match(/^\/api\/orders\/([a-zA-Z0-9-]+)\/approve-expired-payment$/);
+  if (latePayment && method === 'POST') {
+    if ((await body(request))?.confirmed !== true) fail('ابتدا واریز را در حساب مقصد تأیید کنید');
+    return json(await store.approveExpiredPayment(latePayment[1], session.user_id));
+  }
   const file = path.match(/^\/api\/orders\/([a-zA-Z0-9-]+)\/receipt$/);
   if (file && method === 'GET') return receipt(env, (await store.getOrder(file[1]))?.receipt_file_id);
   if (path === '/api/support' && method === 'GET') {
