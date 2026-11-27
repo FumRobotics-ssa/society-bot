@@ -8,6 +8,7 @@ const queueEnv = env => ({
   INBOX_CAPACITY: 256,
   INBOX_CONCURRENCY: 1,
   OUTBOX_LANE_CONCURRENCY: 1,
+  OUTBOX_BACKPRESSURE: true,
   QUEUE_LANES: true,
   RECORD_QUEUE_EVENT(reason) { console.warn(JSON.stringify({ event: 'queue_rejection', reason })); },
 });

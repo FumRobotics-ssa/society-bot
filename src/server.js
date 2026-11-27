@@ -54,6 +54,7 @@ const env = {
   DEFER_TELEGRAM_JOBS: true,
   PREPARE_EVENT_POSTER: prepareEventPoster,
   INBOX_CAPACITY: 256,
+  OUTBOX_BACKPRESSURE: true,
   JOBS_STOPPING: () => stopping,
   RECORD_QUEUE_EVENT: name => { counters[name] = (counters[name] || 0) + 1; },
   CHECKIN_RATE_LIMITER: minuteLimiter(120),

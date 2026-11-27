@@ -8,7 +8,7 @@ export async function receiveTelegram(env, signal) {
   const target = new URL(env.TELEGRAM_INGRESS_URL || 'http://127.0.0.1:8787/telegram');
   let offset;
   let failures = 0;
-  let connected = false;
+  let lastHeartbeat = 0;
   while (!signal.aborted) {
     try {
       const upstream = await telegramFetch(env, 'getUpdates', {
@@ -20,9 +20,8 @@ export async function receiveTelegram(env, signal) {
       if (!upstream.ok) throw new Error(`Telegram poll HTTP ${upstream.status}`);
       const page = await upstream.json();
       if (!page.ok || !Array.isArray(page.result)) throw new Error('Invalid Telegram poll result');
-      if (!connected) {
+      if (!lastHeartbeat) {
         console.info('Telegram polling connection verified');
-        connected = true;
       }
       let received = 0;
       for (const update of page.result.sort((left, right) => left.update_id - right.update_id)) {
@@ -41,6 +40,10 @@ export async function receiveTelegram(env, signal) {
         received++;
       }
       if (received) console.info('Accepted Telegram updates:', received);
+      if (Date.now() - lastHeartbeat >= 60000) {
+        console.info(JSON.stringify({ event: 'telegram_receiver_healthy' }));
+        lastHeartbeat = Date.now();
+      }
       failures = 0;
     } catch (error) {
       if (signal.aborted) break;

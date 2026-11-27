@@ -570,6 +570,62 @@ test('updates refused by a sender limit do not consume the shared Telegram budge
   assert.equal(await receiveUpdate(env, update(82, 9)), null);
 });
 
+test('valid receipts and registration confirmations have reserved space and are not acknowledged before storing', async t => {
+  const { db, env, store, request } = fixture();
+  t.after(() => db.close());
+  Object.assign(env, { INBOX_CAPACITY: 1, VERIFICATION_CHAT: '100', DEFER_TELEGRAM_JOBS: true });
+  const post = update => request('/telegram', { method: 'POST',
+    headers: { 'X-Telegram-Bot-Api-Secret-Token': env.WEBHOOK_SECRET }, body: JSON.stringify(update) });
+  const privateMessage = (id, actor, data) => ({ update_id: id, message: { from: { id: actor }, chat: { type: 'private', id: actor }, ...data } });
+  await receiveUpdate(env, privateMessage(1, 80, { text: '/start' }));
+  env.TELEGRAM_GLOBAL_RATE = { async limit() { return { success: false }; } };
+  env.TELEGRAM_INGRESS_RATE = env.TELEGRAM_GLOBAL_RATE;
+  for (const id of [9, 10]) await store.upsertUser({ id, phone: '09123456789' });
+  const event = await store.saveEvent({ name: 'کارگاه', capacity: 10, is_paid: 1, price: 1000 });
+  const { order } = await store.reserve(9, event.id, 1, 'reserved-9');
+  await store.setState(9, 'payment_receipt', { order_id: order.id });
+  await store.setState(10, 'reserve_confirm', { quote_nonce: '0123456789ab' });
+  const confirm = (id, nonce) => ({ update_id: id, callback_query: {
+    id: `callback-${id}`, from: { id: 10 }, message: { chat: { id: 10, type: 'private' } }, data: `rq:y:${nonce}`,
+  } });
+  const receipt = { document: { mime_type: 'application/pdf', file_id: 'pdf-file', file_size: 1024 } };
+  assert.equal((await post(privateMessage(2, 7, receipt))).status, 200);
+  assert.equal((await post(confirm(3, '0123456789ac'))).status, 200);
+  assert.equal((await post(confirm(4, '0123456789ab'))).status, 200);
+  await db.prepare(`WITH RECURSIVE filler(n) AS (SELECT 100 UNION ALL SELECT n+1 FROM filler WHERE n<130)
+    INSERT INTO inbox(update_id,stream_key,payload) SELECT n,CAST(n AS TEXT),'{}' FROM filler`).run();
+  assert.equal((await post(privateMessage(5, 9, receipt))).status, 503);
+  assert.equal((await post(confirm(4, '0123456789ab'))).status, 200);
+  assert.equal(await store.one('SELECT priority FROM inbox WHERE update_id=5'), null);
+  await db.prepare('DELETE FROM inbox WHERE update_id=130').run();
+  assert.equal((await post(privateMessage(5, 9, receipt))).status, 200);
+  assert.deepEqual((await store.all('SELECT update_id FROM inbox WHERE priority=1 ORDER BY update_id')).map(row => row.update_id), [4, 5]);
+  await processInbox(env, 1, '9');
+  assert.equal((await store.getOrder(order.id)).status, 'pending');
+  assert.equal((await store.one("SELECT count(*) AS n FROM outbox WHERE dedupe_key LIKE 'receipt:%'")).n, 1);
+  await processInbox(env, 1);
+  assert.equal((await store.one('SELECT status FROM inbox WHERE update_id=1')).status, 'new');
+});
+
+test('an outbox backlog delays broadcasts and ordinary intake until the outgoing queue drains', async t => {
+  const { db, env, store } = fixture();
+  t.after(() => db.close());
+  env.OUTBOX_BACKPRESSURE = true;
+  await store.enqueue('__broadcast', { text: 'hello' }, 'broadcast-test');
+  await db.prepare(`WITH RECURSIVE filler(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM filler WHERE n<1023)
+    INSERT INTO outbox(id,method,payload,available_at) SELECT 'future-'||n,'sendMessage','{}',unixepoch()+7200 FROM filler`).run();
+  await receiveUpdate(env, { update_id: 1, message: { from: { id: 9 } } });
+  await processInbox(env, 1);
+  await processOutbox(env, 1, 'bulk');
+  assert.equal((await store.one('SELECT attempts FROM inbox')).attempts, 0);
+  assert.equal((await store.one("SELECT attempts FROM outbox WHERE dedupe_key='broadcast-test'")).attempts, 0);
+  await db.prepare("DELETE FROM outbox WHERE id='future-1'").run();
+  await processInbox(env, 1);
+  await processOutbox(env, 1, 'bulk');
+  assert.equal((await store.one('SELECT status FROM inbox')).status, 'done');
+  assert.equal((await store.one("SELECT status FROM outbox WHERE dedupe_key='broadcast-test'")).status, 'sent');
+});
+
 test('the database cap remains active if the shared rate-limit binding is temporarily unavailable', async t => {
   const { db, env } = fixture();
   t.after(() => db.close());
