@@ -549,6 +549,37 @@ test('standalone intake caps combined accounts and records a rejected update', a
   assert.equal((await db.prepare("SELECT count(*) AS n FROM inbox WHERE status IN ('new','processing')").first()).n, 2);
 });
 
+test('updates refused by a sender limit do not consume the shared Telegram budget', async t => {
+  const { db, env, store } = fixture();
+  t.after(() => db.close());
+  const perAccount = new Map();
+  env.INBOX_CAPACITY = 256;
+  env.TELEGRAM_INGRESS_RATE = { async limit({ key }) {
+    const used = (perAccount.get(key) || 0) + 1;
+    perAccount.set(key, used);
+    return { success: used <= 40 };
+  } };
+  const globalRate = t.mock.fn(async () => ({ success: globalRate.mock.calls.length < 41 }));
+  env.TELEGRAM_GLOBAL_RATE = { limit: globalRate };
+  const update = (id, actor) => ({ update_id: id, message: { from: { id: actor }, chat: { id: actor, type: 'private' } } });
+  for (let id = 1; id <= 80; id++) await receiveUpdate(env, update(id, 7));
+  assert.equal(globalRate.mock.calls.length, 40);
+  assert.equal((await store.one("SELECT count(*) AS n FROM inbox WHERE stream_key='7'")).n, 24);
+  assert.equal(await receiveUpdate(env, update(81, 8)), '8');
+  assert.equal(globalRate.mock.calls.length, 41);
+  assert.equal(await receiveUpdate(env, update(82, 9)), null);
+});
+
+test('the database cap remains active if the shared rate-limit binding is temporarily unavailable', async t => {
+  const { db, env } = fixture();
+  t.after(() => db.close());
+  env.INBOX_CAPACITY = 1;
+  env.TELEGRAM_GLOBAL_RATE = { async limit() { throw new Error('fixture outage'); } };
+  const update = id => ({ update_id: id, message: { from: { id } } });
+  assert.equal(await receiveUpdate(env, update(1)), '1');
+  assert.equal(await receiveUpdate(env, update(2)), null);
+});
+
 test('Worker refuses to claim additional inbox work while another invocation holds the running slot', async t => {
   const { db, env, store } = fixture();
   t.after(() => db.close());

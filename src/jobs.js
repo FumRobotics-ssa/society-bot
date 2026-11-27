@@ -25,10 +25,6 @@ export async function receiveUpdate(env, update) {
     env.RECORD_QUEUE_EVENT?.('blocked');
     return null;
   }
-  if (env.TELEGRAM_GLOBAL_RATE && !(await env.TELEGRAM_GLOBAL_RATE.limit({ key: 'telegram' })).success) {
-    env.RECORD_QUEUE_EVENT?.('global_rate_limited');
-    return null;
-  }
   const streamKey = String(actor || update.update_id);
   let limited = false;
   if (actor && env.TELEGRAM_INGRESS_RATE) {
@@ -36,6 +32,17 @@ export async function receiveUpdate(env, update) {
     catch { console.warn('Telegram request limiter unavailable; using the database queue limit'); }
   }
   if (!limited) {
+    if (env.TELEGRAM_GLOBAL_RATE) {
+      try {
+        if (!(await env.TELEGRAM_GLOBAL_RATE.limit({ key: 'telegram' })).success) {
+          env.RECORD_QUEUE_EVENT?.('global_rate_limited');
+          return null;
+        }
+      } catch (error) {
+        if (!env.INBOX_CAPACITY) throw error;
+        env.RECORD_QUEUE_EVENT?.('global_limiter_unavailable');
+      }
+    }
     const globalGuard = env.INBOX_CAPACITY ? `AND NOT EXISTS (
         SELECT 1 FROM inbox INDEXED BY inbox_stream_active WHERE status IN ('new','processing') LIMIT 1 OFFSET ?
       )` : '';
