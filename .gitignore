@@ -1,5 +1,8 @@
 node_modules/
 .env
+.env.receiver
+.env.compose-qa
+.env.compose-qa.receiver
 .dev.vars
 .wrangler/
 data/

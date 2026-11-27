@@ -7,6 +7,7 @@ import { handleRequest } from '../src/app.js';
 import { handleUpdate } from '../src/bot.js';
 import { createLoginCode, exchangeLogin, digest, SESSION_COOKIE } from '../src/auth.js';
 import { receiveUpdate, processOutbox, processInbox } from '../src/jobs.js';
+import { receiveTelegram } from '../src/telegram-receiver.js';
 
 const schema = readdirSync(new URL('../migrations/', import.meta.url)).filter(name => name.endsWith('.sql')).sort().map(name => readFileSync(new URL('../migrations/' + name, import.meta.url), 'utf8')).join('\n');
 
@@ -499,6 +500,37 @@ test('Telegram ingress caps queued work and blocks repeated bursts after verifyi
   assert.equal(response.status, 200);
   assert.deepEqual(await (await request(URL, { headers: { Cookie: auth } })).json(), []);
   assert.equal(await receiveUpdate(env, update(127, 2, 'پس از رفع مسدودسازی')), '2');
+});
+
+test('the Compose receiver queues Telegram callbacks and forwards registration replies after acknowledgement', async t => {
+  const { db, env, request, store } = fixture();
+  t.after(() => db.close());
+  env.DEFER_TELEGRAM_JOBS = true;
+  const event = await store.saveEvent({ name: 'رویداد تست', capacity: 4 });
+  const shutdown = new AbortController();
+  const offsets = [];
+  const replies = [];
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    const path = new URL(url).pathname;
+    if (path.endsWith('/getUpdates')) {
+      offsets.push(JSON.parse(init.body).offset);
+      if (offsets.length === 1) return Response.json({ ok: true, result: [{
+        update_id: 123, callback_query: { id: 'fixture', from: { id: 42 }, data: `e:${event.id}`,
+          message: { chat: { type: 'private', id: 42 } } },
+      }] });
+      shutdown.abort();
+      return Response.json({ ok: true, result: [] });
+    }
+    if (path === '/telegram') return request('/telegram', init);
+    replies.push(JSON.parse(init.body));
+    return Response.json({ ok: true });
+  });
+  await receiveTelegram(env, AbortSignal.any([shutdown.signal, AbortSignal.timeout(1500)]));
+  assert.deepEqual(offsets, [undefined, 124]);
+  assert.equal((await store.one('SELECT status FROM inbox WHERE update_id=123')).status, 'new');
+  await processInbox(env);
+  await processOutbox(env, 8, 'interactive');
+  assert.ok(replies.some(reply => reply.reply_markup?.inline_keyboard[0][0].callback_data === `register:${event.id}`));
 });
 
 test('standalone intake caps combined accounts and records a rejected update', async t => {

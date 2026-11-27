@@ -11,3 +11,25 @@
 فایل `ops/nginx/robotics-http.conf` در context مربوط به HTTP بارگذاری می‌شود. `ops/nginx/robotics-server.conf` داخل server اصلی HTTPS قرار می‌گیرد. پوشهٔ کش `/var/cache/robotics-posters` باید برای کاربر Nginx قابل نوشتن باشد. کش فقط روی پوسترهای عمومی فعال است و حداکثر پنج دقیقه اعتبار دارد. پیش از بارگذاری مجدد `nginx -t` اجرا شود.
 
 قبل از ارتقا از SQLite یک نسخهٔ سازگار بگیرید و نسخهٔ قبلی برنامه و تنظیمات systemd و Nginx را نگه دارید. برای برگشت برنامه، همان دیتابیس جاری را به کار ببرید تا داده‌های بعد از استقرار حفظ شوند. نسخهٔ Node.js برای این تغییر `22.23.5` است.
+
+## آزمایش Docker Compose
+
+دو سرویس از یک ایمیج استفاده می‌کنند. `robotics-society` تنها سرویس دارای دسترسی به volume دیتابیس است و روی loopback میزبان پورت دارد. `telegram-receiver` پس از healthcheck برنامه شروع می‌شود و درخواست‌ها را در شبکهٔ داخلی Compose تحویل می‌دهد. دریافت مستقیم از تلگرام یا استفاده از واسط با تنظیمات فایل محیطی دریافت‌کننده انتخاب می‌شود.
+
+برای آزمایش، `.env.compose-qa` و `.env.compose-qa.receiver` را از نمونه‌های موجود بسازید. از توکن یک ربات آزمایشی جدا و یک `WEBHOOK_SECRET` مشترک در هر دو فایل استفاده کنید. `PUBLIC_URL` را `http://127.0.0.1:18788` بگذارید و مقادیر ارسال رسید و بکاپ را در محیط آزمایش خالی بگذارید.
+
+```sh
+export ROBOTICS_APP_ENV_FILE=.env.compose-qa
+export ROBOTICS_RECEIVER_ENV_FILE=.env.compose-qa.receiver
+export ROBOTICS_BIND_PORT=18788
+export ROBOTICS_DATA_VOLUME=robotics-compose-qa-data
+
+docker compose -p robotics-compose-qa build robotics-society
+docker compose -p robotics-compose-qa run --rm --no-deps \
+  --volume "$PWD/qa-backup.sqlite:/restore/backup.sqlite:ro" robotics-society \
+  node scripts/restore-sqlite.js /restore/backup.sqlite /app/data/robotics-society.sqlite
+docker compose -p robotics-compose-qa up -d --no-build --wait
+docker compose -p robotics-compose-qa logs --tail=30 telegram-receiver
+```
+
+پیش از بالا آوردن نسخهٔ آزمایشی، اطمینان بگیرید که بکاپ آزمایشی پیام یا کار ارسال‌نشدهٔ تولید ندارد. دستور بازیابی روی فایل مقصد موجود خطا می‌دهد و یکپارچگی و کلیدهای خارجی را بررسی می‌کند. برای استفاده از volume نسخهٔ قبلی Compose، نام دقیق آن را به `ROBOTICS_DATA_VOLUME` بدهید. برای پذیرش، باز شدن پنل، دریافت پیغام در ربات آزمایشی، نمایش دکمهٔ ثبت‌نام و باقی ماندن داده پس از ری‌استارت را بررسی کنید.
