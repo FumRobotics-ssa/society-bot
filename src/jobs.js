@@ -66,6 +66,9 @@ export async function processInbox(env, limit = 1, streamKey = null) {
   const fairBatch = streamKey === null && limit > 1;
   const served = new Set();
   const priority = fairBatch ? "h.stream_key IN (SELECT value FROM json_each(?)), " : "";
+  const concurrencyGuard = env.INBOX_CONCURRENCY ? `AND (
+    SELECT COUNT(*) FROM inbox WHERE status='processing' AND lease_until>=?
+  ) < ?` : '';
   for (let i = 0; i < limit && !env.JOBS_STOPPING?.(); i++) {
     const at = now();
     // Find each stream's head using only active rows. A head in backoff still blocks later updates.
@@ -75,8 +78,9 @@ export async function processInbox(env, limit = 1, streamKey = null) {
       SELECT q.update_id FROM stream_heads h JOIN inbox q ON q.update_id=h.update_id
       WHERE (q.status='new' AND q.available_at<=?) OR (q.status='processing' AND q.lease_until<?)
       ORDER BY ${priority}q.update_id LIMIT 1
-    ) RETURNING *, EXISTS(SELECT 1 FROM telegram_abuse_blocks WHERE stream_key=inbox.stream_key AND unblocked_at IS NULL)
-      AS automatically_blocked`).bind(...target, at + 90, at, at, ...(fairBatch ? [JSON.stringify([...served])] : [])).first();
+    ) ${concurrencyGuard} RETURNING *, EXISTS(SELECT 1 FROM telegram_abuse_blocks WHERE stream_key=inbox.stream_key AND unblocked_at IS NULL)
+      AS automatically_blocked`).bind(...target, at + 90, at, at, ...(fairBatch ? [JSON.stringify([...served])] : []),
+      ...(env.INBOX_CONCURRENCY ? [at, env.INBOX_CONCURRENCY] : [])).first();
     if (!job) return;
     if (fairBatch) served.add(job.stream_key);
     try {
@@ -157,6 +161,9 @@ const outboxLanes = {
 export async function processOutbox(env, limit = 8, lane = null) {
   const laneFilter = lane === null ? '' : outboxLanes[lane];
   if (laneFilter === undefined) throw new Error('Unknown outbox lane');
+  const concurrencyGuard = env.OUTBOX_LANE_CONCURRENCY ? `AND (
+    SELECT COUNT(*) FROM outbox WHERE status='processing' AND lease_until>=? ${laneFilter}
+  ) < ?` : '';
   for (let i = 0; i < limit && !env.JOBS_STOPPING?.(); i++) {
     const at = now();
     // A timed-out receipt send or an expired send lease may already have posted the media.
@@ -171,7 +178,8 @@ export async function processOutbox(env, limit = 8, lane = null) {
       lease_until=CASE WHEN next_job.uncertain_receipt THEN 0 ELSE ? END,
       attempts=attempts + (NOT next_job.uncertain_receipt),
       last_error=CASE WHEN next_job.uncertain_receipt THEN ? ELSE last_error END
-    FROM next_job WHERE outbox.id=next_job.id RETURNING *`).bind(at, at, at + 90, receiptDeliveryUnconfirmed).first();
+    FROM next_job WHERE outbox.id=next_job.id ${concurrencyGuard} RETURNING *`).bind(at, at, at + 90, receiptDeliveryUnconfirmed,
+      ...(env.OUTBOX_LANE_CONCURRENCY ? [at, env.OUTBOX_LANE_CONCURRENCY] : [])).first();
     if (!job) return;
     if (job.status === 'failed') continue;
     const receiptDelivery = job.dedupe_key?.startsWith('receipt:') && ['sendPhoto', 'sendDocument'].includes(job.method);
@@ -227,5 +235,11 @@ export async function maintenance(env, at = new Date()) {
 export async function runJobs(env, { maintenance: maintain = false, inboxLimit = 1, streamKey = null } = {}) {
   if (maintain) await maintenance(env);
   await processInbox(env, inboxLimit, streamKey);
+  if (env.QUEUE_LANES) {
+    await Promise.all([
+      processOutbox(env, 4, 'interactive'), processOutbox(env, 1, 'media'), processOutbox(env, 1, 'bulk'),
+    ]);
+    return;
+  }
   await processOutbox(env, Math.max(8, inboxLimit));
 }

@@ -295,7 +295,8 @@ async function route(request, env, ctx) {
     const update = await body(request, 262144);
     const streamKey = await receiveUpdate(env, update);
     if (streamKey !== null && !env.DEFER_TELEGRAM_JOBS) {
-      ctx.waitUntil(runJobs(env, { streamKey }).catch(() => console.error('Background job failed — inspect durable queue')));
+      ctx.waitUntil(runJobs(env, env.QUEUE_LANES ? { inboxLimit: 4 } : { streamKey })
+        .catch(() => console.error('Background job failed — inspect durable queue')));
     }
     return json({ ok: true });
   }

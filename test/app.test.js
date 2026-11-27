@@ -8,6 +8,7 @@ import { handleUpdate } from '../src/bot.js';
 import { createLoginCode, exchangeLogin, digest, SESSION_COOKIE } from '../src/auth.js';
 import { receiveUpdate, processOutbox, processInbox } from '../src/jobs.js';
 import { receiveTelegram } from '../src/telegram-receiver.js';
+import worker from '../src/worker.js';
 
 const schema = readdirSync(new URL('../migrations/', import.meta.url)).filter(name => name.endsWith('.sql')).sort().map(name => readFileSync(new URL('../migrations/' + name, import.meta.url), 'utf8')).join('\n');
 
@@ -548,6 +549,31 @@ test('standalone intake caps combined accounts and records a rejected update', a
   assert.equal((await db.prepare("SELECT count(*) AS n FROM inbox WHERE status IN ('new','processing')").first()).n, 2);
 });
 
+test('Worker refuses to claim additional inbox work while another invocation holds the running slot', async t => {
+  const { db, env, store } = fixture();
+  t.after(() => db.close());
+  env.INBOX_CONCURRENCY = 1;
+  for (const id of [1, 2]) {
+    await receiveUpdate(env, { update_id: id, message: { from: { id }, chat: { type: 'private', id }, text: '/start' } });
+  }
+  await db.prepare("UPDATE inbox SET status='processing',lease_until=unixepoch()+90 WHERE update_id=1").run();
+  await processInbox(env, 5, '2');
+  assert.equal((await store.one('SELECT status FROM inbox WHERE update_id=2')).status, 'new');
+  await db.prepare('UPDATE inbox SET lease_until=0 WHERE update_id=1').run();
+  await processInbox(env, 5);
+  assert.equal((await store.one("SELECT count(*) AS n FROM inbox WHERE status='done'")).n, 2);
+});
+
+test('Worker previews expose health while the canonical origin applies the login rate limit', async t => {
+  const { db, env } = fixture();
+  t.after(() => db.close());
+  const ctx = { waitUntil() {} };
+  env.WEB_LOGIN_RATE = { limit: async () => ({ success: false }) };
+  assert.equal((await worker.fetch(new Request('https://preview.example.test/health'), env, ctx)).status, 200);
+  assert.equal((await worker.fetch(new Request('https://preview.example.test/api/session'), env, ctx)).status, 404);
+  assert.equal((await worker.fetch(new Request('https://example.test/api/session', { method: 'POST' }), env, ctx)).status, 429);
+});
+
 test('interactive outbox sends registration replies ahead of waiting media and broadcasts', async t => {
   const { db, env, store } = fixture();
   t.after(() => db.close());
@@ -555,10 +581,12 @@ test('interactive outbox sends registration replies ahead of waiting media and b
   await store.enqueue('sendMessage', { chat_id: 1, text: 'broadcast' }, 'broadcast-example:user:1');
   await store.enqueue('sendMessage', { chat_id: 1, text: 'ثبت‌نام' }, 'registration-reply');
   const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({ ok: true }));
+  env.OUTBOX_LANE_CONCURRENCY = 1;
+  await db.prepare("UPDATE outbox SET status='processing',lease_until=unixepoch()+90 WHERE dedupe_key='old-photo'").run();
   await processOutbox(env, 8, 'interactive');
   assert.equal(fetch.mock.calls.length, 1);
   assert.equal(JSON.parse(fetch.mock.calls[0].arguments[1].body).text, 'ثبت‌نام');
-  assert.equal((await store.one("SELECT count(*) AS n FROM outbox WHERE status='pending'")).n, 2);
+  assert.equal((await store.one("SELECT count(*) AS n FROM outbox WHERE status IN ('pending','processing')")).n, 2);
 });
 
 test('Telegram 429 backs off durable outbox without dropping message', async () => {

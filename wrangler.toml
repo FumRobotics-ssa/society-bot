@@ -3,6 +3,10 @@ main = "src/worker.js"
 compatibility_date = "2026-11-01"
 workers_dev = true
 
+[observability.logs]
+enabled = true
+invocation_logs = false
+
 [assets]
 directory = "./public"
 binding = "ASSETS"
@@ -46,4 +50,28 @@ namespace_id = "9472061845"
 
 [ratelimits.simple]
 limit = 3
+period = 60
+
+[[ratelimits]]
+name = "TELEGRAM_GLOBAL_RATE"
+namespace_id = "9472061846"
+
+[ratelimits.simple]
+limit = 600
+period = 60
+
+[[ratelimits]]
+name = "WEB_REQUEST_RATE"
+namespace_id = "9472061847"
+
+[ratelimits.simple]
+limit = 900
+period = 60
+
+[[ratelimits]]
+name = "WEB_LOGIN_RATE"
+namespace_id = "9472061848"
+
+[ratelimits.simple]
+limit = 120
 period = 60

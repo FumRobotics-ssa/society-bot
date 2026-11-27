@@ -239,7 +239,7 @@ export async function handleUpdate(update, env, store) {
     let poster;
     if (event.poster_url?.startsWith('data:')) poster = { _eventPosterId: event.id };
     else if (/^https?:\/\//i.test(event.poster_url)) poster = { photo: event.poster_url };
-    const prioritizeText = Boolean(env.DEFER_TELEGRAM_JOBS);
+    const prioritizeText = Boolean(env.DEFER_TELEGRAM_JOBS || env.QUEUE_LANES);
     if (poster && !prioritizeText && details.length <= CAPTION_LIMIT) return sendPhoto(poster, details, markup, { _fallbackToText: true });
     if (poster && !prioritizeText) await sendPhoto(poster, `📅 ${event.name}`);
     if (details.length > MESSAGE_LIMIT && event.description) {
