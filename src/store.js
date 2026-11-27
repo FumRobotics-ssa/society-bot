@@ -13,6 +13,9 @@ export function displayName(user) {
 }
 
 const OCCUPIED = "(status='approved' OR (status IN ('reserved','pending') AND expires_at>unixepoch()))";
+const PENDING_SEATS = `COALESCE((SELECT SUM(quantity) FROM orders WHERE event_id=e.id
+  AND status IN ('reserved','pending') AND expires_at>unixepoch()),0)`;
+const PENDING_LIMIT = 'MIN(e.capacity,COALESCE(e.pending_booking_limit,MAX(e.max_per_user,(e.capacity*3+3)/4)))';
 const REGISTRATION_OPEN = 'e.archived=0 AND e.active=1 AND (e.registration_closes_at IS NULL OR e.registration_closes_at>unixepoch())';
 const QUESTIONS_OPEN = 'e.archived=0 AND s.enabled=1 AND s.closes_at>unixepoch()';
 const QUESTION_WINDOW = `EXISTS (
@@ -27,6 +30,7 @@ const QUESTIONS_USED = '(SELECT COUNT(*) FROM event_questions q WHERE q.event_id
 const TEST_EVENT_NAME = /(?:^|[^\p{L}\p{N}])(?:test(?:ing)?|demo|sample|تست(?:ی)?|آزمایش(?:ی)?|نمونه(?:ی)?)(?=$|[^\p{L}\p{N}])/iu;
 const ERRORS = {
   EVENT_FULL: 'ظرفیت رویداد تکمیل شده است',
+  PENDING_RESERVATION_LIMIT: 'سقف رزروهای در انتظار این رویداد پر شده است. کمی بعد دوباره امتحان کنید.',
   USER_LIMIT: 'تعداد بلیت از سقف مجاز هر نفر بیشتر است',
   CAPACITY_BELOW_RESERVED: 'ظرفیت نمیتواند از تعداد بلیتهای رزرو شده کمتر باشد',
   USER_LIMIT_BELOW_RESERVED: 'سقف هر نفر نمیتواند از خریدهای قبلی کمتر باشد',
@@ -302,6 +306,8 @@ export class Store {
     const place = placeId ? await this.one('SELECT * FROM places WHERE id=?', placeId) : null;
     if (placeId && !place) throw domainError('NOT_FOUND', 'مکان پیدا نشد');
     const capacity = int(v.capacity ?? place?.capacity, 'ظرفیت', 1000000);
+    const pendingLimit = v.pending_booking_limit == null || v.pending_booking_limit === ''
+      ? null : int(v.pending_booking_limit, 'سقف رزروهای تأییدنشده', capacity);
     const pricingMode = String(v.pricing_mode || 'fixed');
     if (!['fixed', 'differentiated'].includes(pricingMode)) throw domainError('INVALID_INPUT', 'مدل قیمت‌گذاری معتبر نیست');
     const checkedPrice = value => {
@@ -328,14 +334,14 @@ export class Store {
     const registrationClosesAt = v.registration_closes_at == null ? null : int(v.registration_closes_at, 'مهلت ثبت‌نام', 253402300799);
     const values = [string(v.name, 'نام رویداد', 200, true), string(v.description, 'توضیحات', 3500), placeId, capacity,
       int(v.max_per_user, 'سقف هر نفر', 100), paid, price, pricingMode, fumStudentPrice,
-      string(v.payment_instructions, 'دستور پرداخت', 1500), startsAt, endsAt, posterUrl, flag(v.active), registrationClosesAt];
+      string(v.payment_instructions, 'دستور پرداخت', 1500), startsAt, endsAt, posterUrl, flag(v.active), registrationClosesAt, pendingLimit];
     const settings = data.question_settings === undefined ? null : questionSettingsValues(data.question_settings);
     const event = id
       ? this.stmt(`UPDATE events SET name=?,description=?,place_id=?,capacity=?,max_per_user=?,is_paid=?,price=?,
-        pricing_mode=?,fum_student_price=?,payment_instructions=?,starts_at=?,ends_at=?,poster_url=?,active=?,registration_closes_at=?,updated_at=unixepoch()
+        pricing_mode=?,fum_student_price=?,payment_instructions=?,starts_at=?,ends_at=?,poster_url=?,active=?,registration_closes_at=?,pending_booking_limit=?,updated_at=unixepoch()
         WHERE id=?${settings ? ' AND archived=0' : ''}`, ...values, Number(id))
-      : this.stmt(`INSERT INTO events(name,description,place_id,capacity,max_per_user,is_paid,price,pricing_mode,fum_student_price,payment_instructions,starts_at,ends_at,poster_url,active,registration_closes_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, ...values);
+      : this.stmt(`INSERT INTO events(name,description,place_id,capacity,max_per_user,is_paid,price,pricing_mode,fum_student_price,payment_instructions,starts_at,ends_at,poster_url,active,registration_closes_at,pending_booking_limit)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, ...values);
     let saved, savedSettings;
     try {
       if (settings) {
@@ -471,10 +477,11 @@ export class Store {
         const results = await this.db.batch([
           this.stmt(`INSERT INTO orders(id,request_key,user_id,event_id,quantity,unit_price,pricing_group,status,expires_at)
             SELECT ?,?,u.id,e.id,?,?,?,?,CASE WHEN ?>0 THEN unixepoch()+900 ELSE NULL END
-            FROM events e,users u WHERE e.id=? AND u.id=? AND ${REGISTRATION_OPEN} AND u.is_deleted=0 AND ${pricingGuard}`,
+            FROM events e,users u WHERE e.id=? AND u.id=? AND ${REGISTRATION_OPEN} AND u.is_deleted=0 AND ${pricingGuard}
+              AND (?=0 OR ${PENDING_SEATS}+?<=${PENDING_LIMIT})`,
             id, key, quantity, quote.unit_price, quote.pricing_group,
             quote.unit_price > 0 ? 'reserved' : 'approved', quote.unit_price,
-            eventId, userId, ...pricingValues),
+            eventId, userId, ...pricingValues, quote.unit_price, quantity),
           this.stmt(`INSERT INTO tickets(id,token,checkin_code,order_id)
             SELECT json_extract(value,'$.id'),json_extract(value,'$.token'),json_extract(value,'$.checkin_code'),? FROM json_each(?)
             WHERE EXISTS(SELECT 1 FROM orders WHERE id=?)`, id, JSON.stringify(tickets), id),
@@ -482,6 +489,10 @@ export class Store {
         if (Number(results[0]?.meta?.changes) !== 1) {
           const event = await this.getEvent(eventId);
           if (!event?.registration_open) throw domainError('EVENT_INACTIVE', 'این رویداد موجود نیست یا ثبت‌نام آن متوقف شده است');
+          if (quote.unit_price > 0) {
+            const pending = await this.one(`SELECT ${PENDING_SEATS}+?>${PENDING_LIMIT} AS is_full FROM events e WHERE e.id=?`, quantity, eventId);
+            if (pending?.is_full) throw domainError(event.remaining < quantity ? 'EVENT_FULL' : 'PENDING_RESERVATION_LIMIT');
+          }
           throw domainError('PRICE_CHANGED');
         }
         break;

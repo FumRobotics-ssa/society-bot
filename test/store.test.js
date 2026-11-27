@@ -168,8 +168,21 @@ test('expired orders release capacity and cannot later be approved', async t => 
   assert.equal((await store.getOrder(first.order.id)).status, 'expired');
 });
 
+test('unconfirmed paid bookings share the event limit and cancellation releases it', async t => {
+  const { store, event } = await fixture(t, { capacity: 8, max: 2, paid: true });
+  await store.saveEvent({ pending_booking_limit: 3 }, event.id);
+  const held = await store.reserve(1, event.id, 2, 'first-held');
+  await store.submitReceipt(held.order.id, 1, 'receipt');
+  await store.reserve(2, event.id, 1, 'second-held');
+  await assert.rejects(store.reserve(3, event.id, 1, 'over-limit'), { code: 'PENDING_RESERVATION_LIMIT' });
+  await store.cancelOrder(held.order.id, 1);
+  assert.equal((await store.reserve(3, event.id, 2, 'new-hold')).order.status, 'reserved');
+  assert.equal((await store.getEvent(event.id)).pending_booking_limit, 3);
+});
+
 test('expiry queues one notice for a paid reservation that ran out of time before receiving a receipt', async t => {
   const { store, event, db } = await fixture(t, { capacity: 5, paid: true });
+  await store.saveEvent({ pending_booking_limit: 5 }, event.id);
   const reserve = async id => (await store.reserve(id, event.id, 1, `expiry-${id}`)).order;
   const late = await reserve(1);
   const submitted = await reserve(2);

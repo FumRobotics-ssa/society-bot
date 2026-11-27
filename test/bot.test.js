@@ -4,7 +4,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { createDatabase } from '../src/sqlite.js';
 import { Store } from '../src/store.js';
 import { handleUpdate } from '../src/bot.js';
-import { maintenance } from '../src/jobs.js';
+import { maintenance, processOutbox } from '../src/jobs.js';
 
 const schema = readdirSync(new URL('../migrations/', import.meta.url)).filter(name => name.endsWith('.sql')).sort().map(name => readFileSync(new URL('../migrations/' + name, import.meta.url), 'utf8')).join('\n');
 
@@ -517,6 +517,41 @@ test('bot displays poster as photo when event has poster and as text when no pos
   assert.match(photoPayload.caption, /تعداد بلیت مورد نظر را وارد کنید/);
 
   f.db.close();
+});
+
+test('an uploaded event poster goes to Telegram as a file and rejected photos keep the registration button', async t => {
+  const f = setup();
+  t.after(() => f.db.close());
+  Object.assign(f.env, { DB: f.db, BOT_TOKEN: 'fixture-upload' });
+  const event = await f.store.saveEvent({ name: 'رویداد آزمایشی', capacity: 5, poster_url: 'data:image/jpeg;base64,AAEC' });
+  let photoResult = 'success';
+  const sentText = [];
+  const fetch = t.mock.method(globalThis, 'fetch', async (url, { body }) => {
+    if (url.endsWith('/sendPhoto')) {
+      assert.equal(body.get('photo').type, 'image/jpeg');
+      assert.deepEqual([...new Uint8Array(await body.get('photo').arrayBuffer())], [0, 1, 2]);
+      assert.equal(body.has('_eventPosterId'), false);
+      if (photoResult === 'timeout') throw new DOMException('Timed out', 'TimeoutError');
+      if (photoResult === 'rejected') return Response.json({ ok: false, error_code: 400, description: 'Invalid photo' });
+      return Response.json({ ok: true });
+    }
+    if (url.endsWith('/sendMessage')) sentText.push(JSON.parse(body));
+    return Response.json({ ok: true });
+  });
+
+  await f.click(`e:${event.id}`);
+  await processOutbox(f.env);
+  assert.equal(sentText.length, 0);
+
+  for (const result of ['rejected', 'timeout']) {
+    photoResult = result;
+    await f.click(`e:${event.id}`);
+    await processOutbox(f.env);
+    assert.match(sentText.at(-1).text, /رویداد آزمایشی/);
+    assert.equal(sentText.at(-1).reply_markup.inline_keyboard[0][0].callback_data, `register:${event.id}`);
+  }
+  assert.equal(sentText.length, 2);
+  assert.equal(fetch.mock.calls.filter(({ arguments: [url] }) => url.endsWith('/sendPhoto')).length, 3);
 });
 
 test('long poster details preserve the description, venue and booking instructions', async t => {

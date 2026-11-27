@@ -460,6 +460,7 @@ function editEvent(event = null, { copy = false } = {}) {
   form.elements.namedItem('id').value = copy ? '' : event?.id || '';
   $('event-form-title').textContent = copy ? 'پیش‌نویس رویداد جدید' : event ? 'ویرایش رویداد' : 'رویداد جدید';
   ['name', 'description', 'place_id', 'capacity', 'max_per_user', 'price', 'payment_instructions'].forEach((key) => { form.elements.namedItem(key).value = event?.[key] ?? (key === 'max_per_user' ? 1 : key === 'price' ? 0 : ''); });
+  form.elements.namedItem('pending_booking_limit').value = event?.pending_booking_limit ?? '';
   form.elements.namedItem('pricing_mode').value = event?.pricing_mode || 'fixed';
   form.elements.namedItem('public_price').value = event?.price ?? 0;
   form.elements.namedItem('fum_student_price').value = event?.fum_student_price ?? 0;
@@ -809,6 +810,7 @@ $('event-form').addEventListener('submit', (event) => {
     const isPaid = pricingMode === 'differentiated' ? publicPrice > 0 || studentPrice > 0 : fixedPaid;
     const posterUrl = values.get('poster_url') || '';
     const body = { name: values.get('name').trim(), description: values.get('description').trim(), place_id: values.get('place_id') ? Number(values.get('place_id')) : null, capacity: Number(values.get('capacity')), max_per_user: Number(values.get('max_per_user')), price: publicPrice, fum_student_price: studentPrice, pricing_mode: pricingMode, poster_url: posterUrl, payment_instructions: values.get('payment_instructions').trim(), starts_at: startsAt, ends_at: endsAt, is_paid: isPaid, active: values.has('active') };
+    body.pending_booking_limit = values.get('pending_booking_limit') ? Number(values.get('pending_booking_limit')) : null;
     const registrationDay = $('registration-date').value, registrationTime = $('registration-time').value;
     if (registrationTime && !registrationDay) throw new Error('تاریخ پایان ثبت‌نام را انتخاب کنید');
     body.registration_closes_at = registrationDay ? Date.parse(jalaliTimeToIso(parseJalaliDate(registrationDay), registrationTime || '23:59')) / 1000 : null;

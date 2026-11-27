@@ -4,6 +4,7 @@ import { exchangeLogin, getSession, sessionCookie, validOrigin, cookieToken, dig
 import { receiveUpdate, runJobs } from './jobs.js';
 import { exportBackup } from './backup.js';
 import { notifyOrder } from './bot.js';
+import { telegramFetch, telegramFile } from './telegram-api.js';
 
 const json = (data, status = 200, headers = {}) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json;charset=utf-8', ...headers } });
 const html = text => new Response(text, { headers: { 'Content-Type': 'text/html;charset=utf-8' } });
@@ -70,12 +71,12 @@ async function allPages(loader) {
 }
 async function receipt(env, fileId) {
   if (!fileId) fail('رسید پیدا نشد', 404);
-  const response = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/getFile`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file_id: fileId }), signal: AbortSignal.timeout(10000) });
+  const response = await telegramFetch(env, 'getFile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file_id: fileId }), signal: AbortSignal.timeout(10000) });
   const file = await response.json();
   const path = file.result?.file_path;
   if (!file.ok || !path || path.includes('..') || !/^[A-Za-z0-9_./-]+$/.test(path)) fail('دریافت رسید از تلگرام ناموفق بود', 502);
   if (file.result.file_size > 20 * 1024 * 1024) fail('حجم رسید بیش از حد مجاز است', 413);
-  const upstream = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${path}`, { signal: AbortSignal.timeout(15000) });
+  const upstream = await telegramFile(env, path, { signal: AbortSignal.timeout(15000) });
   if (!upstream.ok) fail('دریافت فایل ناموفق بود', 502);
   const type = upstream.headers.get('Content-Type') || '';
   const safeType = /^(image\/(png|jpeg|webp)|application\/pdf)(;|$)/.test(type) ? type : 'application/octet-stream';
@@ -91,14 +92,14 @@ async function api(request, env, store, url) {
     const event = await store.getEvent(Number(posterMatch[1]));
     if (!event || !event.poster_url) fail('پوستر پیدا نشد', 404);
     if (event.poster_url.startsWith('data:')) {
-      const m = event.poster_url.match(/^data:([^;]+);base64,(.+)$/);
+      const m = event.poster_url.match(/^data:(image\/(?:jpeg|png|webp|gif));base64,(.+)$/);
       if (!m) fail('قالب پوستر نامعتبر است', 400);
       const mime = m[1];
       const binary = Uint8Array.from(atob(m[2]), c => c.charCodeAt(0));
       return new Response(binary, {
         headers: {
           'Content-Type': mime,
-          'Cache-Control': 'public, max-age=86400',
+          'Cache-Control': 'public, max-age=300',
         }
       });
     }
@@ -108,7 +109,7 @@ async function api(request, env, store, url) {
     fail('پوستر پیدا نشد', 404);
   }
   if (path === '/api/session' && method === 'POST') {
-    const data = await body(request);
+    const data = await body(request, 4096);
     const session = await exchangeLogin(env.DB, data.token);
     if (!session) fail('لینک ورود نامعتبر یا منقضی شده است دوباره از ربات دستور admin بگیرید', 401);
     // Revocation and owner allowlists are evaluated on every request.
@@ -293,7 +294,7 @@ async function route(request, env, ctx) {
     if (!env.BOT_TOKEN || !env.WEBHOOK_SECRET || !await safeEqual(request.headers.get('X-Telegram-Bot-Api-Secret-Token'), env.WEBHOOK_SECRET)) return json({ error: 'Forbidden' }, 403);
     const update = await body(request, 262144);
     const streamKey = await receiveUpdate(env, update);
-    if (streamKey !== null) {
+    if (streamKey !== null && !env.DEFER_TELEGRAM_JOBS) {
       ctx.waitUntil(runJobs(env, { streamKey }).catch(() => console.error('Background job failed — inspect durable queue')));
     }
     return json({ ok: true });
@@ -323,7 +324,7 @@ export async function handleRequest(request, env, ctx = { waitUntil: promise => 
   hardened.headers.set('X-Content-Type-Options', 'nosniff');
   hardened.headers.set('Referrer-Policy', 'no-referrer');
   hardened.headers.set('X-Frame-Options', 'DENY');
-  hardened.headers.set('Cache-Control', 'no-store');
+  if (!hardened.headers.has('Cache-Control')) hardened.headers.set('Cache-Control', 'no-store');
   hardened.headers.set('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
   hardened.headers.set('Permissions-Policy', 'camera=(self), microphone=(), geolocation=()');
   hardened.headers.set('Strict-Transport-Security', 'max-age=31536000');

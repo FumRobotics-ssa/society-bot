@@ -501,6 +501,34 @@ test('Telegram ingress caps queued work and blocks repeated bursts after verifyi
   assert.equal(await receiveUpdate(env, update(127, 2, 'پس از رفع مسدودسازی')), '2');
 });
 
+test('standalone intake caps combined accounts and records a rejected update', async t => {
+  const { db, env } = fixture();
+  t.after(() => db.close());
+  const counters = [];
+  Object.assign(env, { INBOX_CAPACITY: 2, RECORD_QUEUE_EVENT: name => counters.push(name) });
+  const update = id => ({ update_id: id, message: { from: { id }, chat: { type: 'private', id }, text: '/start' } });
+  assert.equal(await receiveUpdate(env, update(1)), '1');
+  assert.equal(await receiveUpdate(env, update(2)), '2');
+  assert.equal(await receiveUpdate(env, update(3)), null);
+  assert.deepEqual(counters, ['not_enqueued']);
+  await processInbox(env);
+  assert.equal(await receiveUpdate(env, update(4)), '4');
+  assert.equal((await db.prepare("SELECT count(*) AS n FROM inbox WHERE status IN ('new','processing')").first()).n, 2);
+});
+
+test('interactive outbox sends registration replies ahead of waiting media and broadcasts', async t => {
+  const { db, env, store } = fixture();
+  t.after(() => db.close());
+  await store.enqueue('sendPhoto', { chat_id: 1, photo: 'fixture-photo' }, 'old-photo');
+  await store.enqueue('sendMessage', { chat_id: 1, text: 'broadcast' }, 'broadcast-example:user:1');
+  await store.enqueue('sendMessage', { chat_id: 1, text: 'ثبت‌نام' }, 'registration-reply');
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({ ok: true }));
+  await processOutbox(env, 8, 'interactive');
+  assert.equal(fetch.mock.calls.length, 1);
+  assert.equal(JSON.parse(fetch.mock.calls[0].arguments[1].body).text, 'ثبت‌نام');
+  assert.equal((await store.one("SELECT count(*) AS n FROM outbox WHERE status='pending'")).n, 2);
+});
+
 test('Telegram 429 backs off durable outbox without dropping message', async () => {
   const { db, env, store } = fixture(); await store.enqueue('sendMessage', { chat_id: 1, text: 'hello' }, 'x');
   const original = globalThis.fetch; globalThis.fetch = async () => Response.json({ ok: false, error_code: 429, parameters: { retry_after: 60 } });

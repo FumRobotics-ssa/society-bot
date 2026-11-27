@@ -2,6 +2,7 @@ import { createLoginCode } from './auth.js';
 import { displayName, neshanUrl, SUPPORT_CONTACT, SUPPORT_STATUSES } from './store.js';
 import { configuredStudentNumberLength, isFumStudent, isValidStudentNumber, normalizeStudentNumber, pricingGroupLabel } from './pricing.js';
 import { formatEventSchedule } from '../public/jalali.js';
+import { telegramFetch } from './telegram-api.js';
 
 const FA_DIGITS = '۰۱۲۳۴۵۶۷۸۹';
 const AR_DIGITS = '٠١٢٣٤٥٦٧٨٩';
@@ -28,10 +29,11 @@ const UNKNOWN_COMMAND = 'این دستور موجود نیست یا اجازه �
 const BOT_USERNAME_CACHE_MS = 60 * 60 * 1000;
 
 let botIdentity;
-async function botUsername(token) {
+async function botUsername(env) {
+  const token = env.BOT_TOKEN;
   if (!token) throw new Error('BOT_TOKEN is not configured');
   if (botIdentity?.token === token && botIdentity.expiresAt > Date.now()) return botIdentity.username;
-  const response = await fetch(`https://api.telegram.org/bot${token}/getMe`, { signal: AbortSignal.timeout(10000) });
+  const response = await telegramFetch(env, 'getMe', { signal: AbortSignal.timeout(10000) });
   const data = await response.json();
   const username = data.result?.username;
   if (!response.ok || !data.ok || typeof username !== 'string' || !/^[A-Za-z0-9_]{5,32}$/.test(username)) {
@@ -185,7 +187,9 @@ export async function handleUpdate(update, env, store) {
   const isAdmin = role === 'admin' || role === 'owner';
   const isChecker = isAdmin || role === 'checkin';
   const send = (text, markup = undefined, tag = 'reply', chatId = chat.id) => store.enqueue('sendMessage', { chat_id: chatId, text: String(text).slice(0, MESSAGE_LIMIT), ...(markup ? { reply_markup: markup } : {}) }, `${updateKey}:${tag}`);
-  const sendPhoto = (photo, caption, markup) => store.enqueue('sendPhoto', { chat_id: chat.id, photo, caption, ...(markup ? { reply_markup: markup } : {}) }, `${updateKey}:photo`);
+  const sendPhoto = (source, caption, markup, options = {}) => store.enqueue('sendPhoto', {
+    chat_id: chat.id, ...source, caption, ...(markup ? { reply_markup: markup } : {}), ...options,
+  }, `${updateKey}:photo`);
   const answer = (text = '') => callback && store.enqueue('answerCallbackQuery', { callback_query_id: callback.id, text: text.slice(0, 190) }, `${updateKey}:answer`);
   const panel = async () => {
     if (!isChecker || chat.type !== 'private') return send('🔒 پنل فقط برای افراد مجاز و از گفت‌وگوی خصوصی ربات در دسترس است.');
@@ -223,7 +227,7 @@ export async function handleUpdate(update, env, store) {
   const sendEventLink = async eventId => {
     const event = await store.getEventSummary(positive(eventId));
     if (!event) return send('رویداد پیدا نشد یا بایگانی شده است', MENU);
-    const username = await botUsername(env.BOT_TOKEN);
+    const username = await botUsername(env);
     const url = `https://t.me/${username}?start=${EVENT_LINK_PREFIX}${event.id}`;
     const status = event.registration_open ? '' : 'پس از باز شدن ثبت‌نام، همین لینک کار می‌کند.';
     return send(paragraphs(`🔗 لینک ثبت‌نام «${event.name}»`, url, status), {
@@ -232,15 +236,19 @@ export async function handleUpdate(update, env, store) {
   };
   const sendEventDetails = async (event, extra, markup) => {
     const details = paragraphs(eventText(event), extra);
-    let poster = event.poster_url;
-    if (poster && !/^https?:\/\//i.test(poster)) poster = link(env, `/api/events/${event.id}/poster`);
-    if (poster && details.length <= CAPTION_LIMIT) return sendPhoto(poster, details, markup);
-    if (poster) await sendPhoto(poster, `📅 ${event.name}`);
+    let poster;
+    if (event.poster_url?.startsWith('data:')) poster = { _eventPosterId: event.id };
+    else if (/^https?:\/\//i.test(event.poster_url)) poster = { photo: event.poster_url };
+    const prioritizeText = Boolean(env.DEFER_TELEGRAM_JOBS);
+    if (poster && !prioritizeText && details.length <= CAPTION_LIMIT) return sendPhoto(poster, details, markup, { _fallbackToText: true });
+    if (poster && !prioritizeText) await sendPhoto(poster, `📅 ${event.name}`);
     if (details.length > MESSAGE_LIMIT && event.description) {
       await send(`📝 توضیحات «${event.name}»\n\n${event.description}`, undefined, 'event_description');
-      return send(paragraphs(eventText(event, { includeDescription: false }), extra), markup);
+      await send(paragraphs(eventText(event, { includeDescription: false }), extra), markup);
+    } else {
+      await send(details, markup);
     }
-    return send(details, markup);
+    if (poster && prioritizeText) await sendPhoto(poster, `📅 ${event.name}`, undefined, { _optionalPoster: true });
   };
   const selectEvent = async (eventId, { begin = false, afterSignup = false } = {}) => {
     const id = positive(eventId);
@@ -513,6 +521,7 @@ export async function handleUpdate(update, env, store) {
         try {
           result = await store.reserve(from.id, current.event_id, current.quantity, `${updateKey}:reserve`, current, configuredStudentNumberLength(env.FUM_STUDENT_NUMBER_LENGTH));
         } catch (error) {
+          if (error.code === 'PENDING_RESERVATION_LIMIT') env.RECORD_QUEUE_EVENT?.('reservation_limit');
           if (error.code === 'EVENT_INACTIVE') {
             await transition('idle', {}, `ℹ️ ${error.message}`, MENU);
             return answer('ثبت‌نام این رویداد بسته شده است');
