@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createDatabase } from './sqlite.js';
 import { handleRequest } from './app.js';
 import { maintenance, processInbox, processOutbox } from './jobs.js';
+import { prepareEventPoster } from './poster-jpeg.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 for (const field of ['BOT_TOKEN', 'OWNER_IDS', 'PUBLIC_URL', 'WEBHOOK_SECRET']) {
@@ -51,6 +52,7 @@ const env = {
   ...process.env,
   DB: db,
   DEFER_TELEGRAM_JOBS: true,
+  PREPARE_EVENT_POSTER: prepareEventPoster,
   INBOX_CAPACITY: 256,
   JOBS_STOPPING: () => stopping,
   RECORD_QUEUE_EVENT: name => { counters[name] = (counters[name] || 0) + 1; },

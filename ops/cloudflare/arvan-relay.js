@@ -3,7 +3,7 @@ import { safeEqual } from '../../src/auth.js';
 const origin = 'https://37.152.178.89';
 const pathPrefix = '/_arvan_telegram/';
 const apiMethods = new Set([
-  'getMe', 'getUpdates', 'getFile', 'sendMessage', 'sendPhoto', 'sendDocument', 'answerCallbackQuery', 'editMessageText', 'editMessageReplyMarkup',
+  'getMe', 'getUpdates', 'getFile', 'sendMessage', 'sendPhoto', 'sendDocument', 'answerCallbackQuery', 'editMessageText', 'editMessageReplyMarkup', 'editMessageMedia',
 ]);
 export default {
   async fetch(request, env) {

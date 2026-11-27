@@ -242,13 +242,34 @@ export async function handleUpdate(update, env, store) {
     const prioritizeText = Boolean(env.DEFER_TELEGRAM_JOBS || env.QUEUE_LANES);
     if (poster && !prioritizeText && details.length <= CAPTION_LIMIT) return sendPhoto(poster, details, markup, { _fallbackToText: true });
     if (poster && !prioritizeText) await sendPhoto(poster, `📅 ${event.name}`);
+    if (poster && prioritizeText) {
+      let caption = details;
+      let followup = '';
+      if (details.length > CAPTION_LIMIT) {
+        caption = paragraphs(eventText(event, { includeDescription: false }), extra);
+        followup = event.description && `📝 توضیحات «${event.name}»\n\n${event.description}`;
+        if (caption.length > CAPTION_LIMIT) {
+          if (details.length > MESSAGE_LIMIT && event.description) {
+            await send(followup, undefined, 'event_description');
+            followup = caption;
+          } else {
+            followup = details;
+          }
+          caption = paragraphs(`📅 ${event.name}`, extra);
+        }
+      }
+      await store.enqueue('sendMessage', {
+        chat_id: chat.id, text: caption, reply_markup: markup, _attachPoster: poster,
+      }, `${updateKey}:reply`);
+      if (followup) await send(followup, undefined, 'event_more_details');
+      return;
+    }
     if (details.length > MESSAGE_LIMIT && event.description) {
       await send(`📝 توضیحات «${event.name}»\n\n${event.description}`, undefined, 'event_description');
       await send(paragraphs(eventText(event, { includeDescription: false }), extra), markup);
     } else {
       await send(details, markup);
     }
-    if (poster && prioritizeText) await sendPhoto(poster, `📅 ${event.name}`, undefined, { _optionalPoster: true });
   };
   const selectEvent = async (eventId, { begin = false, afterSignup = false } = {}) => {
     const id = positive(eventId);
@@ -276,9 +297,9 @@ export async function handleUpdate(update, env, store) {
       ), { inline_keyboard: [[
         { text: `دانشجوی فردوسی · ${money(event.fum_student_price)} تومان`, callback_data: `tariff:y:${id}` },
         { text: `عموم · ${money(event.price)} تومان`, callback_data: `tariff:n:${id}` },
-      ]] });
+      ]] }, event);
     }
-    if (pricing.requires_student_number) return promptFumStudentNumber(event.id);
+    if (pricing.requires_student_number) return promptFumStudentNumber(event.id, false, event);
     if (pricing.unit_price > 0 && !env.VERIFICATION_CHAT) {
       const message = 'ℹ️ ثبت‌نام این رویداد موقتاً بسته است. بخش بررسی پرداخت هنوز آماده نیست.';
       return afterSignup ? transition('idle', {}, message, MENU) : send(message);
@@ -302,8 +323,9 @@ export async function handleUpdate(update, env, store) {
     if (offset > 0) buttons.push([{ text: 'صفحه قبل', callback_data: `ls:${Math.max(0, offset - 15)}` }]);
     await send('🎫 بلیت‌ها و سفارش‌های من\n\nبرای دیدن وضعیت سفارش یا باز کردن بلیت، یکی را انتخاب کنید.', { inline_keyboard: buttons });
   };
-  const transition = async (step, data, text, markup) => {
-    await send(text, markup);
+  const transition = async (step, data, text, markup, event) => {
+    if (event?.poster_url) await sendEventDetails(event, text, markup);
+    else await send(text, markup);
     await store.setState(from.id, step, { ...data, last_update_id: update.update_id });
   };
   const finishQuestion = (data, text) => transition(data.resume?.step || 'idle', data.resume?.data || {}, text, MENU);
@@ -344,9 +366,9 @@ export async function handleUpdate(update, env, store) {
   const startSignup = (eventId = null) => transition('signup:full_name', {
     profile: {}, username: from.username || '', ...(eventId ? { registration_event_id: eventId, quick_signup: true } : {}),
   }, paragraphs('👤 ساخت حساب کاربری', eventId && 'پس از ساخت حساب، ثبت‌نام همین رویداد را ادامه می‌دهید.', FULL_NAME_PROMPT));
-  const promptFumStudentNumber = async (eventId = null, chooseStudentTariff = false) => transition('fum_student_number',
+  const promptFumStudentNumber = async (eventId = null, chooseStudentTariff = false, event) => transition('fum_student_number',
     { event_id: eventId ? Number(eventId) : null, choose_student_tariff: chooseStudentTariff },
-    STUDENT_NUMBER_PROMPT, notFumKeyboard(update.update_id));
+    STUDENT_NUMBER_PROMPT, notFumKeyboard(update.update_id), event);
   const saveFumStudentNumber = async (value, data = {}) => {
     const user = await needAccount();
     if (!user) return;
