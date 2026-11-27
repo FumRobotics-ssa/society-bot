@@ -14,25 +14,32 @@ function cleanError(error, env) {
 }
 export async function receiveUpdate(env, update) {
   if (!Number.isSafeInteger(update?.update_id)) throw new Error('Invalid update');
-  const actor = update.callback_query?.from?.id || update.message?.from?.id || update.update_id;
-  await env.DB.prepare('INSERT OR IGNORE INTO inbox(update_id,stream_key,payload) VALUES(?,?,?)').bind(update.update_id, String(actor), JSON.stringify(update)).run();
+  const streamKey = String(update.callback_query?.from?.id || update.message?.from?.id || update.update_id);
+  await env.DB.prepare('INSERT OR IGNORE INTO inbox(update_id,stream_key,payload) VALUES(?,?,?)').bind(update.update_id, streamKey, JSON.stringify(update)).run();
+  return streamKey;
 }
-export async function processInbox(env, limit = 1) {
+export async function processInbox(env, limit = 1, streamKey = null) {
   const store = new Store(env.DB);
+  const active = "status IN ('new','processing')";
+  const heads = streamKey === null
+    ? `SELECT stream_key, MIN(update_id) AS update_id FROM inbox INDEXED BY inbox_stream_active WHERE ${active} GROUP BY stream_key`
+    : `SELECT MIN(update_id) AS update_id FROM inbox INDEXED BY inbox_stream_active WHERE stream_key=? AND ${active}`;
+  const target = streamKey === null ? [] : [streamKey];
+  const fairBatch = streamKey === null && limit > 1;
+  const served = new Set();
+  const priority = fairBatch ? "h.stream_key IN (SELECT value FROM json_each(?)), " : "";
   for (let i = 0; i < limit; i++) {
     const at = now();
     // Find each stream's head using only active rows. A head in backoff still blocks later updates.
-    const job = await env.DB.prepare(`WITH stream_heads AS (
-      SELECT MIN(update_id) AS update_id FROM inbox INDEXED BY inbox_pending
-      WHERE status IN ('new','processing') GROUP BY stream_key
-    )
+    const job = await env.DB.prepare(`WITH stream_heads AS (${heads})
     UPDATE inbox SET status='processing',lease_until=?,attempts=attempts+1
     WHERE update_id=(
       SELECT q.update_id FROM stream_heads h JOIN inbox q ON q.update_id=h.update_id
       WHERE (q.status='new' AND q.available_at<=?) OR (q.status='processing' AND q.lease_until<?)
-      ORDER BY q.update_id LIMIT 1
-    ) RETURNING *`).bind(at + 90, at, at).first();
+      ORDER BY ${priority}q.update_id LIMIT 1
+    ) RETURNING *`).bind(...target, at + 90, at, at, ...(fairBatch ? [JSON.stringify([...served])] : [])).first();
     if (!job) return;
+    if (fairBatch) served.add(job.stream_key);
     try {
       await handleUpdate(JSON.parse(job.payload), env, store);
       await env.DB.prepare("UPDATE inbox SET status='done',processed_at=?,last_error=NULL WHERE update_id=? AND lease_until=?").bind(now(), job.update_id, nowLease(job)).run();
@@ -140,8 +147,8 @@ export async function maintenance(env, at = new Date()) {
     await store.enqueue('__backup', {}, `backup:${at.toISOString().slice(0, 10)}`);
   }
 }
-export async function runJobs(env, { maintenance: maintain = false } = {}) {
+export async function runJobs(env, { maintenance: maintain = false, inboxLimit = 1, streamKey = null } = {}) {
   if (maintain) await maintenance(env);
-  await processInbox(env, 1);
-  await processOutbox(env, 8);
+  await processInbox(env, inboxLimit, streamKey);
+  await processOutbox(env, Math.max(8, inboxLimit));
 }

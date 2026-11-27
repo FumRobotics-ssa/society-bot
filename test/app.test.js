@@ -512,6 +512,28 @@ test('sender ordering blocks later updates during retry backoff but permits othe
   assert.equal((await db.prepare('SELECT status FROM inbox WHERE update_id=3').first()).status, 'done'); db.close();
 });
 
+test('a new webhook processes its sender without waiting for another sender’s backlog', async t => {
+  const { db, env, store } = fixture();
+  t.after(() => db.close());
+  for (let id = 1; id <= 4; id++) await receiveUpdate(env, { update_id: id, message: { from: { id: 1 } } });
+  const stream = await receiveUpdate(env, { update_id: 5, message: { from: { id: 2 } } });
+  await receiveUpdate(env, { update_id: 6, message: { from: { id: 2 } } });
+  const status = id => store.one('SELECT status FROM inbox WHERE update_id=?', id).then(row => row.status);
+  await db.prepare('UPDATE inbox SET available_at=unixepoch()+300 WHERE update_id=5').run();
+  await processInbox(env, 1, stream);
+  assert.equal(await status(5), 'new');
+  assert.equal(await status(6), 'new');
+  await db.prepare('UPDATE inbox SET available_at=0 WHERE update_id=5').run();
+  await processInbox(env, 1, stream);
+  assert.equal(await status(1), 'new');
+  assert.equal(await status(5), 'done');
+  assert.equal(await status(6), 'new');
+  await processInbox(env, 2);
+  assert.equal(await status(1), 'done');
+  assert.equal(await status(2), 'new');
+  assert.equal(await status(6), 'done');
+});
+
 test('inbox claims the first eligible active update and recovers an expired lease in order', async t => {
   const { db, env } = fixture();
   t.after(() => db.close());
